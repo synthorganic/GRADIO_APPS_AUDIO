@@ -250,7 +250,13 @@ def style_load_diffusion():
     global STYLE_MBD
     if STYLE_MBD is None:
         print("[Style] Loading MultiBandDiffusion...")
-        STYLE_MBD = MultiBandDiffusion.get_mbd_musicgen().to(STYLE_DEVICE)
+        STYLE_MBD = MultiBandDiffusion.get_mbd_musicgen()
+        try:
+            STYLE_MBD = STYLE_MBD.to(STYLE_DEVICE)
+        except AttributeError:
+            if hasattr(STYLE_MBD, "model"):
+                STYLE_MBD.model = STYLE_MBD.model.to(STYLE_DEVICE)
+            STYLE_MBD.device = STYLE_DEVICE
 
 
 def style_predict(text, melody, duration=10, topk=250, topp=0.0, temperature=1.0,
@@ -306,6 +312,34 @@ def style_predict(text, melody, duration=10, topk=250, topp=0.0, temperature=1.0
         sr_out = STYLE_MODEL.sample_rate
 
     return _write_wav(wav, sr_out, stem="style", trim_db=float(out_trim_db))
+
+# ============================================================================
+# SECTION COMPOSER TAB [NEW]
+# ============================================================================
+def compose_sections(structure: str, prompts: str, lengths: str,
+                     bpm: float = 120.0, xf_beats: float = 1.0,
+                     out_trim_db: float = -3.0):
+    """Compose multiple sections with equal-power crossfades."""
+    sections = [s.strip() for s in structure.split(',') if s.strip()]
+    prompt_list = [p.strip() for p in prompts.split('|') if p.strip()]
+    length_list = [float(x.strip()) for x in lengths.split(',') if x.strip()]
+    if not (len(sections) == len(prompt_list) == len(length_list)):
+        raise gr.Error("Structure, prompts and lengths counts must match.")
+
+    style_load_model()
+    sr = STYLE_MODEL.sample_rate
+    xf_sec = float(xf_beats) * 60.0 / max(1.0, float(bpm))
+    assembled = None
+    for prompt, dur in zip(prompt_list, length_list):
+        STYLE_MODEL.set_generation_params(duration=int(dur))
+        seg = STYLE_MODEL.generate([prompt])[0].detach().cpu().float()
+        if seg.dim() == 1:
+            seg = seg.unsqueeze(0)
+        assembled = seg if assembled is None else _crossfade_concat(assembled, seg, sr, xf_sec=xf_sec)
+
+    if assembled is None:
+        raise gr.Error("No valid sections were generated.")
+    return _write_wav(assembled, sr, stem="sections", trim_db=float(out_trim_db))
 
 # ============================================================================
 # AUDIOGEN CONTINUATION TAB [ALTERED]
@@ -442,6 +476,35 @@ def ui_full(launch_kwargs):
                 style_predict,
                 inputs=[text, melody, dur, topk, topp, temp, cfg, double_cfg, cfg_beta, eval_q, excerpt, decoder, out_trim_style],
                 outputs=out_style,
+                queue=True,
+            )
+
+        # ----- SECTION COMPOSER -----
+        with gr.Tab("Section Composer"):
+            with gr.Row():
+                structure = gr.Textbox(
+                    label="Structure",
+                    value="Intro,A,B,Break,Drop,Outro",
+                    placeholder="Comma-separated sections"
+                )
+                sec_prompts = gr.Textbox(
+                    label="Prompts (| separated)",
+                    placeholder="Intro vibe|A section|B section|Break|Drop|Outro"
+                )
+                sec_lengths = gr.Textbox(
+                    label="Lengths (s, comma-separated)",
+                    value="4,8,8,4,8,8"
+                )
+            with gr.Row():
+                bpm = gr.Slider(40, 240, value=120, step=1, label="Tempo (BPM)")
+                xf_beats = gr.Slider(0.0, 8.0, value=1.0, step=0.25, label="Crossfade (beats)")
+            out_trim_sections = gr.Slider(-24.0, 0.0, value=-3.0, step=0.5, label="Output Trim (dB)")
+            out_sections = gr.Audio(label="Output", type="filepath")
+            btn_sections = gr.Button("Enqueue", variant="primary")
+            btn_sections.click(
+                compose_sections,
+                inputs=[structure, sec_prompts, sec_lengths, bpm, xf_beats, out_trim_sections],
+                outputs=out_sections,
                 queue=True,
             )
 
