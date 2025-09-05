@@ -188,7 +188,7 @@ def _audiogen_continue_compat(model, prompt: str, tail_32k_mono: torch.Tensor, s
     Always pass a TENSOR for the audio prompt; never wrap in a list.
     If no compatible signature exists, return None (caller will emulate).
     """
-    tail = tail_32k_mono.detach().cpu()
+    tail = tail_32k_mono.detach().to(model.device)
     if tail.dim() == 3 and tail.size(0) == 1:
         tail = tail[0]           # (1, T)
     elif tail.dim() == 1:
@@ -243,7 +243,6 @@ def style_load_model():
     global STYLE_MODEL
     if STYLE_MODEL is None:
         print(f"[Style] Loading facebook/musicgen-style on {STYLE_DEVICE}")
-        torch.cuda.set_device(STYLE_DEVICE.index)
         STYLE_MODEL = MusicGen.get_pretrained("facebook/musicgen-style")
         STYLE_MODEL.device = STYLE_DEVICE  # MusicGen isn't nn.Module; don't call .to()
 
@@ -251,8 +250,7 @@ def style_load_diffusion():
     global STYLE_MBD
     if STYLE_MBD is None:
         print("[Style] Loading MultiBandDiffusion...")
-        torch.cuda.set_device(STYLE_DEVICE.index)
-        STYLE_MBD = MultiBandDiffusion.get_mbd_musicgen()
+        STYLE_MBD = MultiBandDiffusion.get_mbd_musicgen().to(STYLE_DEVICE)
 
 
 def style_predict(text, melody, duration=10, topk=250, topp=0.0, temperature=1.0,
@@ -316,7 +314,6 @@ def audiogen_load_model(name: str = "facebook/audiogen-medium"):
     global AUDIOGEN_MODEL
     if AUDIOGEN_MODEL is None:
         print(f"[AudioGen] Loading {name} on {AUDIOGEN_DEVICE} ...")
-        torch.cuda.set_device(AUDIOGEN_DEVICE.index)
         AUDIOGEN_MODEL = AudioGen.get_pretrained(name)
         AUDIOGEN_MODEL.device = AUDIOGEN_DEVICE
     return AUDIOGEN_MODEL
@@ -400,7 +397,6 @@ def separate_stems(audio_input):
 
     # Prefer running on UTILITY_DEVICE cuda:3 when available
     if UTILITY_DEVICE.type == "cuda":
-        torch.cuda.set_device(UTILITY_DEVICE.index)
         demucs_args = ["-n", "htdemucs", "-d", "cuda", "-o", str(out_dir), str(in_path)]
     else:
         demucs_args = ["-n", "htdemucs", "-d", "cpu", "-o", str(out_dir), str(in_path)]
