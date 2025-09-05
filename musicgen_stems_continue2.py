@@ -65,7 +65,7 @@ def _rms(x: torch.Tensor) -> float:
     return float(torch.sqrt(torch.clamp((x ** 2).mean(), min=1e-12)).item())
 
 
-def _move_to_device(obj, device: torch.device):
+def _move_to_device(obj, device: torch.device, _seen: set[int] | None = None):
     """Recursively move ``obj`` and its tensors to ``device``.
 
     ``MultiBandDiffusion`` pulls in components that are not registered as
@@ -74,7 +74,18 @@ def _move_to_device(obj, device: torch.device):
     triggers *"Expected all tensors to be on the same device"* errors.  This
     helper walks through an arbitrary Python object and attempts to relocate
     every tensor it can find onto the requested device.
+
+    ``_seen`` keeps track of already visited objects to avoid infinite
+    recursion when objects reference themselves or share references.
     """
+
+    if _seen is None:
+        _seen = set()
+
+    obj_id = id(obj)
+    if obj_id in _seen:
+        return obj
+    _seen.add(obj_id)
 
     # Direct module or tensor: move and return early.
     if isinstance(obj, torch.nn.Module):
@@ -86,32 +97,22 @@ def _move_to_device(obj, device: torch.device):
     # Containers: recurse over their items.
     if isinstance(obj, (list, tuple, set)):
         for item in obj:
-            _move_to_device(item, device)
+            _move_to_device(item, device, _seen)
         return obj
     if isinstance(obj, dict):
         for key, val in obj.items():
-            obj[key] = _move_to_device(val, device)
+            obj[key] = _move_to_device(val, device, _seen)
         return obj
 
-    # Generic object: inspect attributes and move what we can.
-    for name in dir(obj):
-        if name.startswith("_"):
-            continue
-        try:
-            val = getattr(obj, name)
-        except AttributeError:
-            continue
-        if isinstance(val, torch.Tensor):
-            setattr(obj, name, val.to(device))
-        elif isinstance(val, torch.nn.Module):
-            val.to(device)
-        elif hasattr(val, "to"):
-            try:
-                val.to(device)
-            except Exception:
-                _move_to_device(val, device)
-        else:
-            _move_to_device(val, device)
+    # Generic object: inspect attributes and move what we can. We only
+    # consider attributes from ``__dict__`` to skip methods/properties that
+    # might spawn new objects or recurse infinitely.
+    if hasattr(obj, "__dict__"):
+        for name, val in vars(obj).items():
+            if isinstance(val, torch.Tensor):
+                setattr(obj, name, val.to(device))
+            else:
+                _move_to_device(val, device, _seen)
     return obj
 
 def _prep_to_32k(audio_input, take_last_seconds: float | None = None, device: torch.device = UTILITY_DEVICE) -> torch.Tensor:
