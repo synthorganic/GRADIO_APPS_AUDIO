@@ -64,6 +64,56 @@ def _rms(x: torch.Tensor) -> float:
     x = x.float()
     return float(torch.sqrt(torch.clamp((x ** 2).mean(), min=1e-12)).item())
 
+
+def _move_to_device(obj, device: torch.device):
+    """Recursively move ``obj`` and its tensors to ``device``.
+
+    ``MultiBandDiffusion`` pulls in components that are not registered as
+    ``nn.Module`` (e.g. raw ``Tensor`` codebooks inside the quantizer).  A
+    plain ``.to(device)`` therefore leaves these tensors behind which later
+    triggers *"Expected all tensors to be on the same device"* errors.  This
+    helper walks through an arbitrary Python object and attempts to relocate
+    every tensor it can find onto the requested device.
+    """
+
+    # Direct module or tensor: move and return early.
+    if isinstance(obj, torch.nn.Module):
+        obj.to(device)
+        return obj
+    if isinstance(obj, torch.Tensor):
+        return obj.to(device)
+
+    # Containers: recurse over their items.
+    if isinstance(obj, (list, tuple, set)):
+        for item in obj:
+            _move_to_device(item, device)
+        return obj
+    if isinstance(obj, dict):
+        for key, val in obj.items():
+            obj[key] = _move_to_device(val, device)
+        return obj
+
+    # Generic object: inspect attributes and move what we can.
+    for name in dir(obj):
+        if name.startswith("_"):
+            continue
+        try:
+            val = getattr(obj, name)
+        except AttributeError:
+            continue
+        if isinstance(val, torch.Tensor):
+            setattr(obj, name, val.to(device))
+        elif isinstance(val, torch.nn.Module):
+            val.to(device)
+        elif hasattr(val, "to"):
+            try:
+                val.to(device)
+            except Exception:
+                _move_to_device(val, device)
+        else:
+            _move_to_device(val, device)
+    return obj
+
 def _prep_to_32k(audio_input, take_last_seconds: float | None = None, device: torch.device = UTILITY_DEVICE) -> torch.Tensor:
     """Return mono 32k tensor on device; optionally last N seconds only."""
     sr, wav_np = audio_input
@@ -251,12 +301,13 @@ def style_load_diffusion():
     if STYLE_MBD is None:
         print("[Style] Loading MultiBandDiffusion...")
         STYLE_MBD = MultiBandDiffusion.get_mbd_musicgen()
-        try:
-            STYLE_MBD = STYLE_MBD.to(STYLE_DEVICE)
-        except AttributeError:
-            if hasattr(STYLE_MBD, "model"):
-                STYLE_MBD.model = STYLE_MBD.model.to(STYLE_DEVICE)
-            STYLE_MBD.device = STYLE_DEVICE
+        # ``MultiBandDiffusion`` isn't a regular ``nn.Module`` so a naive
+        # ``.to(device)`` call can leave internal tensors (e.g. quantizer
+        # codebooks) on their original device.  Use the recursive helper to
+        # ensure *everything* lives on ``STYLE_DEVICE``.
+        _move_to_device(STYLE_MBD, STYLE_DEVICE)
+        # track device manually for downstream checks
+        STYLE_MBD.device = STYLE_DEVICE
 
 
 def style_predict(text, melody, duration=10, topk=250, topp=0.0, temperature=1.0,
