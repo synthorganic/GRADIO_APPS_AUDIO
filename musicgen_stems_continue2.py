@@ -622,6 +622,15 @@ def _master_complex(audio_input, out_trim_db: float = -1.0):
         ),
         str(mix_path),
     ]
+    mix_path = TMP_DIR / f"mastered_complex_{uuid.uuid4().hex}.wav"
+    cmd = ["ffmpeg", "-y"]
+    for m in mastered:
+        cmd.extend(["-i", str(m)])
+    cmd.extend([
+        "-filter_complex",
+        f"amix=inputs={len(mastered)}:normalize=0",
+        str(mix_path),
+    ])
     sp.run(cmd, check=True)
     return str(mix_path)
 
