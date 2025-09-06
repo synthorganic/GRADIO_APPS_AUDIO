@@ -162,7 +162,15 @@ def _move_musicgen(model, device: torch.device):
     if model is None:
         return
     _move_to_device(model, device)
-    model.device = device
+    # ``MusicGen`` exposes ``set_device`` which takes care of moving
+    # subordinate components such as the T5 text encoder.  Calling it here
+    # prevents mismatched-device errors where parts of the conditioner remain
+    # on an old GPU.
+    try:
+        model.set_device(device)
+    except AttributeError:
+        # Fallback for potential mocks or minimal stubs in tests.
+        model.device = device
 
 
 def _offload_musicgen(model):
