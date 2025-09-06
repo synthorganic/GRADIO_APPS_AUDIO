@@ -710,16 +710,29 @@ def _apply_harmonic_exciter(in_path: Path, out_path: Path, freq: float) -> None:
 
 
 def _matchering_match(target: str, reference: str, output: str) -> None:
-    """Call Matchering's matching either via API or CLI.
+    """Call Matchering's matching via API fallbacks or CLI.
 
-    Older releases exposed a ``match`` function while newer versions
-    only provide a CLI entry point.  This wrapper first tries the API
-    and falls back to invoking the module as a script when the function
-    is missing.
+    Some Matchering releases expose a simple ``match`` helper while
+    others only bundle the lower level ``process`` API or a CLI script.
+    This wrapper tries the high level helper first, then the low level
+    API, and finally falls back to invoking a CLI entry point if one is
+    available.
     """
-    if mg is not None and hasattr(mg, "match"):
-        mg.match(target=target, reference=reference, output=output)
-        return
+    if mg is not None:
+        # Some Matchering releases expose a high level ``match`` helper. If
+        # available, use it directly.
+        if hasattr(mg, "match"):
+            mg.match(target=target, reference=reference, output=output)
+            return
+
+        # Some versions ship without a convenient ``match`` wrapper or CLI
+        # entry point but still expose the lower level ``process`` API and the
+        # ``Result`` container.  Emulate the CLI by calling ``process``
+        # directly so we don't require an external executable.
+        if hasattr(mg, "process") and hasattr(mg, "Result"):
+            res = mg.Result(output, "PCM_16")
+            mg.process(target=target, reference=reference, results=[res])
+            return
 
     # Fall back to a CLI invocation.  Different Matchering versions expose
     # different entry points, so try a couple of common variants before giving
