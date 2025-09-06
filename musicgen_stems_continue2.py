@@ -38,15 +38,23 @@ except ImportError:
     MATCHERING_AVAILABLE = False
 
 # ---------- Devices [ALTERED] ----------
-STYLE_DEVICE = torch.device("cuda:1")       # Style pinned to GPU1
-AUDIOGEN_DEVICE = torch.device("cuda:0")    # AudioGen on GPU0
+# Spread heavy composer workloads across the first three GPUs so each
+# model occupies its own device and memory usage remains manageable.
+STYLE_DEVICE = torch.device("cuda:0")        # Style model on GPU0
+MEDIUM_DEVICE = torch.device("cuda:1")       # MusicGen-medium on GPU1
+LARGE_DEVICE = torch.device("cuda:2")        # MusicGen-large on GPU2
+AUDIOGEN_DEVICE = torch.device("cuda:1")     # AudioGen shares GPU1
 UTILITY_DEVICE = (
-    torch.device("cuda:3")
-    if torch.cuda.is_available() and torch.cuda.device_count() > 3
+    torch.device("cuda:2")
+    if torch.cuda.is_available() and torch.cuda.device_count() > 2
     else torch.device("cpu")
 )
 
-print(f"[Boot] STYLE: {STYLE_DEVICE} | AUDIOGEN: {AUDIOGEN_DEVICE} | UTILITY(preproc/demucs): {UTILITY_DEVICE}")
+print(
+    f"[Boot] STYLE: {STYLE_DEVICE} | MEDIUM: {MEDIUM_DEVICE} | "
+    f"LARGE: {LARGE_DEVICE} | AUDIOGEN: {AUDIOGEN_DEVICE} | "
+    f"UTILITY(preproc/demucs): {UTILITY_DEVICE}"
+)
 
 # ---------- Constants & paths [ALTERED] ----------
 TARGET_SR = 32000
@@ -402,7 +410,15 @@ def compose_sections(
     prev = _prep_to_32k(init_audio, device=UTILITY_DEVICE) if init_audio else None
     assembled = None
     for sec in sections:
-        model = STYLE_MODEL if sec["type"] in STYLE_SECTIONS else MEDIUM_MODEL
+        if sec["type"] in STYLE_SECTIONS:
+            model = STYLE_MODEL
+            device = STYLE_DEVICE
+        else:
+            model = MEDIUM_MODEL
+            device = MEDIUM_DEVICE
+        # ensure subsequent ops run on the correct device
+        torch.cuda.set_device(device)
+        model.device = device
         model.set_generation_params(duration=int(sec["length"]))
         best_wav = None
         best_score = -1e9
@@ -429,6 +445,7 @@ def compose_sections(
         best_wav = _time_stretch_to_grid(best_wav, sec["length"], sr, bpm)
         assembled = best_wav if assembled is None else _crossfade_concat(assembled, best_wav, sr, xf_sec=xf_sec)
         prev = best_wav.unsqueeze(0)
+        torch.cuda.empty_cache()
     return _write_wav(assembled, sr, stem="sections", trim_db=float(out_trim_db))
 
 
@@ -473,20 +490,22 @@ def style_load_diffusion():
 
 
 def medium_load_model():
-    """Lazy-load facebook/musicgen-medium on STYLE_DEVICE."""
+    """Lazy-load facebook/musicgen-medium on MEDIUM_DEVICE."""
     global MEDIUM_MODEL
     if MEDIUM_MODEL is None:
-        print(f"[Medium] Loading facebook/musicgen-medium on {STYLE_DEVICE}")
+        print(f"[Medium] Loading facebook/musicgen-medium on {MEDIUM_DEVICE}")
         MEDIUM_MODEL = MusicGen.get_pretrained("facebook/musicgen-medium")
-        MEDIUM_MODEL.device = STYLE_DEVICE
+        MEDIUM_MODEL.device = MEDIUM_DEVICE
     return MEDIUM_MODEL
+
+
 def large_load_model():
-    """Lazy-load facebook/musicgen-large on STYLE_DEVICE."""
+    """Lazy-load facebook/musicgen-large on LARGE_DEVICE."""
     global LARGE_MODEL
     if LARGE_MODEL is None:
-        print(f"[Large] Loading facebook/musicgen-large on {STYLE_DEVICE}")
+        print(f"[Large] Loading facebook/musicgen-large on {LARGE_DEVICE}")
         LARGE_MODEL = MusicGen.get_pretrained("facebook/musicgen-large")
-        LARGE_MODEL.device = STYLE_DEVICE
+        LARGE_MODEL.device = LARGE_DEVICE
     return LARGE_MODEL
 
 
