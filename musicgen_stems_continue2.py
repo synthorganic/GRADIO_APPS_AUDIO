@@ -571,16 +571,16 @@ def separate_stems(audio_input):
 # MASTERING TAB UTILITIES [NEW]
 # ============================================================================
 
-def _ffmpeg_basic_cleanup(in_path: Path, out_path: Path) -> None:
+def _ffmpeg_basic_cleanup(in_path: Path, out_path: Path, sr: int) -> None:
     """Apply basic corrective EQ via ffmpeg to mitigate common artefacts."""
     hums = [50, 60, 100, 120, 150, 180]
     filters = ["highpass=f=30", "highpass=f=40"]
     # ``equalizer`` is widely available in ffmpeg whereas ``anequalizer``
     # lacks the "f" option on older builds.  Using ``equalizer`` avoids
-    # "Option 'f' not found" runtime failures.
-    filters += [f"equalizer=f={h}:t=o:w=2:g=-25" for h in hums]
+    # "Option 'f' not found" runtime failures.  Make reductions 10x subtler.
+    filters += [f"equalizer=f={h}:t=o:w=2:g=-2.5" for h in hums]
     if 15600 < TARGET_SR / 2:
-        filters.append("equalizer=f=15600:t=o:w=2:g=-25")
+        filters.append("equalizer=f=15600:t=o:w=2:g=-2.5")
     filters.append("lowpass=f=18000")
     cmd = [
         "ffmpeg",
@@ -589,12 +589,16 @@ def _ffmpeg_basic_cleanup(in_path: Path, out_path: Path) -> None:
         str(in_path),
         "-af",
         ",".join(filters),
+        "-ar",
+        str(sr),
+        "-sample_fmt",
+        "s32",
         str(out_path),
     ]
     sp.run(cmd, check=True)
 
 
-def _apply_harmonic_exciter(in_path: Path, out_path: Path, freq: float) -> None:
+def _apply_harmonic_exciter(in_path: Path, out_path: Path, freq: float, sr: int) -> None:
     """Light harmonic excitement using ffmpeg's aexciter filter."""
     cmd = [
         "ffmpeg",
@@ -602,7 +606,11 @@ def _apply_harmonic_exciter(in_path: Path, out_path: Path, freq: float) -> None:
         "-i",
         str(in_path),
         "-af",
-        f"aexciter=freq={freq}",
+        f"aexciter=freq={freq}:amount=0.1",
+        "-ar",
+        str(sr),
+        "-sample_fmt",
+        "s32",
         str(out_path),
     ]
     sp.run(cmd, check=True)
@@ -653,7 +661,7 @@ def _matchering_match(target: str, reference: str, output: str) -> None:
     raise gr.Error("Matchering CLI invocation failed; ensure it is installed")
 
 
-def _apply_stereo_space(in_path: Path, out_path: Path, width: float = 1.5, pan: float = 0.0) -> None:
+def _apply_stereo_space(in_path: Path, out_path: Path, sr: int, width: float = 1.5, pan: float = 0.0) -> None:
     """Use ffmpeg to widen stereo image and apply gentle panning.
 
     ``stereotools`` uses ``slev`` to control stereo width; earlier versions of
@@ -665,13 +673,19 @@ def _apply_stereo_space(in_path: Path, out_path: Path, width: float = 1.5, pan: 
     ``stereotools`` invocation fails we fall back to the simpler
     ``stereowiden`` filter as a best-effort approximation.
     """
+    width_s = 1.0 + (width - 1.0) / 10.0
+    pan_s = pan / 10.0
     cmd = [
         "ffmpeg",
         "-y",
         "-i",
         str(in_path),
         "-af",
-        f"stereotools=slev={width}:balance_out={pan}",
+        f"stereotools=slev={width_s}:balance_out={pan_s}",
+        "-ar",
+        str(sr),
+        "-sample_fmt",
+        "s32",
         str(out_path),
     ]
     try:
@@ -683,13 +697,17 @@ def _apply_stereo_space(in_path: Path, out_path: Path, width: float = 1.5, pan: 
             "-i",
             str(in_path),
             "-af",
-            f"stereowiden=delay=20:feedback=0.3:crossfeed={max(0.0, width - 1.0)}:drymix=0.8",
+            f"stereowiden=delay=20:feedback=0.3:crossfeed={max(0.0, width_s - 1.0)}:drymix=0.8",
+            "-ar",
+            str(sr),
+            "-sample_fmt",
+            "s32",
             str(out_path),
         ]
         sp.run(fallback, check=True)
 
 
-def _beat_match_and_harmonize(stem_paths: list[Path], out_path: Path) -> None:
+def _beat_match_and_harmonize(stem_paths: list[Path], out_path: Path, sr: int) -> None:
     """Recombine stems with basic beat matching and harmonization.
 
     Uses ffmpeg's ``amix`` to sum the stems and ``aresample=async`` to keep
@@ -700,7 +718,7 @@ def _beat_match_and_harmonize(stem_paths: list[Path], out_path: Path) -> None:
     for p in stem_paths:
         cmd.extend(["-i", str(p)])
     filter_complex = f"amix=inputs={len(stem_paths)}:normalize=0,aresample=async=1"
-    cmd.extend(["-filter_complex", filter_complex, str(out_path)])
+    cmd.extend(["-filter_complex", filter_complex, "-ar", str(sr), "-sample_fmt", "s32", str(out_path)])
     sp.run(cmd, check=True)
 
 
@@ -719,7 +737,7 @@ def _master_simple(audio_input, out_trim_db: float = -1.0):
     matched_path = TMP_DIR / f"mastered_simple_{uuid.uuid4().hex}.wav"
     _matchering_match(target=str(in_path), reference=str(ref), output=str(matched_path))
     widened_path = TMP_DIR / f"mastered_simple_wide_{uuid.uuid4().hex}.wav"
-    _apply_stereo_space(matched_path, widened_path)
+    _apply_stereo_space(matched_path, widened_path, sr)
     return str(widened_path)
 
 
@@ -729,6 +747,10 @@ def _master_complex(audio_input, out_trim_db: float = -1.0):
         raise gr.Error("Matchering not installed. `pip install matchering`")
     if not DEMUCS_AVAILABLE:
         raise gr.Error("Demucs not installed. `pip install demucs`")
+    try:
+        sr, _ = audio_input
+    except Exception:
+        raise gr.Error("Please provide an audio clip.")
     stems = separate_stems(audio_input)
     ref = Path.home() / "references" / "reference.wav"
     if not ref.exists():
@@ -738,30 +760,32 @@ def _master_complex(audio_input, out_trim_db: float = -1.0):
     for stem_path in stems:
         stem_p = Path(stem_path)
         p_path = TMP_DIR / f"proc_{stem_p.stem}_{uuid.uuid4().hex}.wav"
-        _ffmpeg_basic_cleanup(stem_p, p_path)
+        _ffmpeg_basic_cleanup(stem_p, p_path, sr)
 
         if stem_p.stem in {"vocals", "other"}:
             freq = 4000 if stem_p.stem == "vocals" else 8000
             e_path = TMP_DIR / f"excite_{stem_p.stem}_{uuid.uuid4().hex}.wav"
-            _apply_harmonic_exciter(p_path, e_path, freq)
+            _apply_harmonic_exciter(p_path, e_path, freq, sr)
             p_path = e_path
 
         m_path = TMP_DIR / f"master_{stem_p.stem}_{uuid.uuid4().hex}.wav"
         _matchering_match(target=str(p_path), reference=str(ref), output=str(m_path))
 
         w_path = TMP_DIR / f"stereo_{stem_p.stem}_{uuid.uuid4().hex}.wav"
-        _apply_stereo_space(m_path, w_path)
+        _apply_stereo_space(m_path, w_path, sr)
         processed.append(w_path)
 
     if len(processed) != 4:
         raise gr.Error(f"Expected 4 stems (drums, vocals, bass, other); got {len(processed)}")
 
     mix_path = TMP_DIR / f"mix_{uuid.uuid4().hex}.wav"
-    _beat_match_and_harmonize(processed, mix_path)
+    _beat_match_and_harmonize(processed, mix_path, sr)
 
     final_path = TMP_DIR / f"mastered_complex_{uuid.uuid4().hex}.wav"
     _matchering_match(target=str(mix_path), reference=str(ref), output=str(final_path))
-    return str(final_path)
+    resamp_path = TMP_DIR / f"mastered_complex_sr_{uuid.uuid4().hex}.wav"
+    sp.run(["ffmpeg", "-y", "-i", str(final_path), "-ar", str(sr), "-sample_fmt", "s32", str(resamp_path)], check=True)
+    return str(resamp_path)
 
 
 def master_track(audio_input, pathway: str, out_trim_db: float = -1.0):
