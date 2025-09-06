@@ -34,6 +34,7 @@ try:
     import matchering as mg
     MATCHERING_AVAILABLE = True
 except ImportError:
+    mg = None  # ensure symbol exists for type checkers and wrappers
     MATCHERING_AVAILABLE = False
 
 # ---------- Devices [ALTERED] ----------
@@ -393,7 +394,6 @@ def compose_sections(
     style_load_model()
     medium_load_model()
     large_load_model()
- main
     if decoder == "MultiBand_Diffusion":
         style_load_diffusion()
     sr = TARGET_SR
@@ -402,10 +402,7 @@ def compose_sections(
     prev = _prep_to_32k(init_audio, device=UTILITY_DEVICE) if init_audio else None
     assembled = None
     for sec in sections:
- codex/implement-multi-model-composer-structure-q0tn0k
         model = STYLE_MODEL if sec["type"] in STYLE_SECTIONS else MEDIUM_MODEL
-        model = STYLE_MODEL if sec["type"] in STYLE_SECTIONS else LARGE_MODEL
-        main
         model.set_generation_params(duration=int(sec["length"]))
         best_wav = None
         best_score = -1e9
@@ -688,6 +685,35 @@ def _apply_harmonic_exciter(in_path: Path, out_path: Path, freq: float) -> None:
     sp.run(cmd, check=True)
 
 
+def _matchering_match(target: str, reference: str, output: str) -> None:
+    """Call Matchering's matching either via API or CLI.
+
+    Older releases exposed a ``match`` function while newer versions
+    only provide a CLI entry point.  This wrapper first tries the API
+    and falls back to invoking the module as a script when the function
+    is missing.
+    """
+    if hasattr(mg, "match"):
+        mg.match(target=target, reference=reference, output=output)
+    else:  # fallback to CLI invocation
+        cmd = ["python", "-m", "matchering", target, reference, output]
+        sp.run(cmd, check=True)
+
+
+def _apply_stereo_space(in_path: Path, out_path: Path, width: float = 1.5, pan: float = 0.0) -> None:
+    """Use ffmpeg to widen stereo image and apply gentle panning."""
+    cmd = [
+        "ffmpeg",
+        "-y",
+        "-i",
+        str(in_path),
+        "-af",
+        f"stereotools=width={width}:balance_out={pan}",
+        str(out_path),
+    ]
+    sp.run(cmd, check=True)
+
+
 def _master_simple(audio_input, out_trim_db: float = -1.0):
     if not MATCHERING_AVAILABLE:
         raise gr.Error("Matchering not installed. `pip install matchering`")
@@ -700,9 +726,11 @@ def _master_simple(audio_input, out_trim_db: float = -1.0):
     ref = Path.home() / "references" / "reference.wav"
     if not ref.exists():
         raise gr.Error(f"Reference file missing: {ref}")
-    out_path = TMP_DIR / f"mastered_simple_{uuid.uuid4().hex}.wav"
-    mg.match(target=str(in_path), reference=str(ref), output=str(out_path))
-    return str(out_path)
+    matched_path = TMP_DIR / f"mastered_simple_{uuid.uuid4().hex}.wav"
+    _matchering_match(target=str(in_path), reference=str(ref), output=str(matched_path))
+    widened_path = TMP_DIR / f"mastered_simple_wide_{uuid.uuid4().hex}.wav"
+    _apply_stereo_space(matched_path, widened_path)
+    return str(widened_path)
 
 
 def _master_complex(audio_input, out_trim_db: float = -1.0):
@@ -722,7 +750,7 @@ def _master_complex(audio_input, out_trim_db: float = -1.0):
         c_path = TMP_DIR / f"clean_{stem_p.stem}_{uuid.uuid4().hex}.wav"
         _ffmpeg_basic_cleanup(stem_p, c_path)
         m_path = TMP_DIR / f"master_{stem_p.stem}_{uuid.uuid4().hex}.wav"
-        mg.match(target=str(c_path), reference=str(ref), output=str(m_path))
+        _matchering_match(target=str(c_path), reference=str(ref), output=str(m_path))
 
         # Harmonic excitement on vocals and other (synth) layers
         if stem_p.stem in {"vocals", "other"}:
@@ -730,6 +758,10 @@ def _master_complex(audio_input, out_trim_db: float = -1.0):
             e_path = TMP_DIR / f"excite_{stem_p.stem}_{uuid.uuid4().hex}.wav"
             _apply_harmonic_exciter(m_path, e_path, freq)
             m_path = e_path
+
+        w_path = TMP_DIR / f"stereo_{stem_p.stem}_{uuid.uuid4().hex}.wav"
+        _apply_stereo_space(m_path, w_path)
+        m_path = w_path
 
         cleaned.append(c_path)
         mastered.append(m_path)
