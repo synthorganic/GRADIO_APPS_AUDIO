@@ -14,6 +14,8 @@ import warnings
 import uuid
 from pathlib import Path
 import subprocess as sp
+import sys
+import shutil
 
 import torch
 import torch.nn.functional as F
@@ -674,9 +676,12 @@ def _ffmpeg_basic_cleanup(in_path: Path, out_path: Path) -> None:
     """Apply basic corrective EQ via ffmpeg to mitigate common artefacts."""
     hums = [50, 60, 100, 120, 150, 180]
     filters = ["highpass=f=30", "highpass=f=40"]
-    filters += [f"anequalizer=f={h}:t=o:w=2:g=-25" for h in hums]
+    # ``equalizer`` is widely available in ffmpeg whereas ``anequalizer``
+    # lacks the "f" option on older builds.  Using ``equalizer`` avoids
+    # "Option 'f' not found" runtime failures.
+    filters += [f"equalizer=f={h}:t=o:w=2:g=-25" for h in hums]
     if 15600 < TARGET_SR / 2:
-        filters.append("anequalizer=f=15600:t=o:w=2:g=-25")
+        filters.append("equalizer=f=15600:t=o:w=2:g=-25")
     filters.append("lowpass=f=18000")
     cmd = [
         "ffmpeg",
@@ -712,11 +717,28 @@ def _matchering_match(target: str, reference: str, output: str) -> None:
     and falls back to invoking the module as a script when the function
     is missing.
     """
-    if hasattr(mg, "match"):
+    if mg is not None and hasattr(mg, "match"):
         mg.match(target=target, reference=reference, output=output)
-    else:  # fallback to CLI invocation
-        cmd = ["python", "-m", "matchering", target, reference, output]
-        sp.run(cmd, check=True)
+        return
+
+    # Fall back to a CLI invocation.  Different Matchering versions expose
+    # different entry points, so try a couple of common variants before giving
+    # up.
+    cmd_candidates = [
+        [sys.executable, "-m", "matchering.cli", target, reference, output],
+        [sys.executable, "-m", "matchering", target, reference, output],
+    ]
+    exe = shutil.which("matchering")
+    if exe:
+        cmd_candidates.append([exe, target, reference, output])
+
+    for cmd in cmd_candidates:
+        try:
+            sp.run(cmd, check=True)
+            return
+        except (FileNotFoundError, sp.CalledProcessError):
+            continue
+    raise gr.Error("Matchering CLI invocation failed; ensure it is installed")
 
 
 def _apply_stereo_space(in_path: Path, out_path: Path, width: float = 1.5, pan: float = 0.0) -> None:
