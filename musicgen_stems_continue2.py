@@ -755,14 +755,20 @@ def _matchering_match(target: str, reference: str, output: str) -> None:
 
 
 def _apply_stereo_space(in_path: Path, out_path: Path, width: float = 1.5, pan: float = 0.0) -> None:
-    """Use ffmpeg to widen stereo image and apply gentle panning."""
+    """Use ffmpeg to widen stereo image and apply gentle panning.
+
+    ``stereotools`` uses ``slev`` to control stereo width; earlier versions of
+    this script tried to pass a non-existent ``width`` option which caused
+    ffmpeg to fail.  Mapping ``width`` to ``slev`` keeps the caller API stable
+    while using the correct ffmpeg parameter.
+    """
     cmd = [
         "ffmpeg",
         "-y",
         "-i",
         str(in_path),
         "-af",
-        f"stereotools=width={width}:balance_out={pan}",
+        f"stereotools=slev={width}:balance_out={pan}",
         str(out_path),
     ]
     sp.run(cmd, check=True)
