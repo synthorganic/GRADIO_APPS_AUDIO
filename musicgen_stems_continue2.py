@@ -117,12 +117,23 @@ def _move_to_device(obj, device: torch.device, _seen: set[int] | None = None):
         return obj
     _seen.add(obj_id)
 
-    # Direct module or tensor: move and return early.
-    if isinstance(obj, torch.nn.Module):
-        obj.to(device)
-        return obj
+    # Direct tensors: move and return early.
     if isinstance(obj, torch.Tensor):
         return obj.to(device)
+
+    # Modules: ``.to`` moves parameters/buffers but may leave raw tensors
+    # hanging around.  We still traverse their attributes to catch any
+    # unregistered tensors (e.g. quantizer codebooks in MultiBandDiffusion).
+    if isinstance(obj, torch.nn.Module):
+        obj.to(device)
+        for name, val in vars(obj).items():
+            if name in {"_parameters", "_buffers", "_modules"}:
+                continue
+            if isinstance(val, torch.Tensor):
+                setattr(obj, name, val.to(device))
+            else:
+                _move_to_device(val, device, _seen)
+        return obj
 
     # Containers: recurse over their items.
     if isinstance(obj, (list, tuple, set)):
