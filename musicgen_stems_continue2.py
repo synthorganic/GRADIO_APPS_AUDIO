@@ -256,88 +256,7 @@ def _crossfade_concat(src: torch.Tensor, gen: torch.Tensor, sr: int, xf_sec: flo
     out = torch.cat([src_keep, mixed, gen[:, nxf:]], dim=1)
     return out.contiguous()
 
-def _audiogen_continue_compat(model, prompt: str, tail_32k_mono: torch.Tensor, sr: int):
-    """
-    Try AudioGen continuation across Audiocraft versions, using keyword variants only.
-    Always pass a TENSOR for the audio prompt; never wrap in a list.
-    If no compatible signature exists, return None (caller will emulate).
-    """
-    tail = tail_32k_mono.detach().to(model.device)
-    if tail.dim() == 3 and tail.size(0) == 1:
-        tail = tail[0]           # (1, T)
-    elif tail.dim() == 1:
-        tail = tail.unsqueeze(0) # (1, T)
-    elif tail.dim() != 2:
-        raise gr.Error(f"tail must be (C,T) or (1,C,T); got {tuple(tail.shape)}")
-
-    if hasattr(model, "generate_continuation"):
-        # Newer-ish
-        try:
-            return model.generate_continuation(
-                descriptions=[prompt],
-                audio_wavs=tail,
-                audio_sample_rate=sr,
-            )
-        except TypeError:
-            pass
-        # Variant naming
-        try:
-            return model.generate_continuation(
-                descriptions=[prompt],
-                audio=tail,
-                audio_sample_rate=sr,
-            )
-        except TypeError:
-            pass
-        # Older-ish
-        try:
-            return model.generate_continuation(
-                descriptions=[prompt],
-                wavs=tail,
-                sample_rate=sr,
-            )
-        except TypeError:
-            pass
-        # Some builds use "prompts" instead of "descriptions"
-        try:
-            return model.generate_continuation(
-                prompts=[prompt],
-                audio=tail,
-                audio_sample_rate=sr,
-            )
-        except TypeError:
-            pass
-
-    return None  # let caller emulate
-
-# ---------- MusicGen continuation + scoring helpers [NEW] ----------
-def _musicgen_continue_compat(model, prompt: str, tail_32k_mono: torch.Tensor, sr: int, return_tokens: bool = False):
-    """Attempt MusicGen continuation across versions."""
-    if not hasattr(model, "generate_continuation"):
-        return None
-    tail = tail_32k_mono.detach().to(model.device)
-    if tail.dim() == 2:
-        tail = tail.unsqueeze(0)
-    kwargs = {"audio_sample_rate": sr}
-    if return_tokens:
-        kwargs["return_tokens"] = True
-    variants = [
-        ("descriptions", "audio_wavs"),
-        ("descriptions", "audio"),
-        ("descriptions", "wavs"),
-        ("prompts", "audio"),
-        ("prompts", "audio_wavs"),
-    ]
-    for kd, ka in variants:
-        try:
-            kwargs[kd] = [prompt]
-            kwargs[ka] = tail
-            return model.generate_continuation(**kwargs)
-        except TypeError:
-            kwargs.pop(kd, None)
-            kwargs.pop(ka, None)
-    return None
-
+# ---------- MusicGen scoring helpers [NEW] ----------
 
 def _time_stretch_to_grid(wav: torch.Tensor, seconds: float, sr: int, bpm: float) -> torch.Tensor:
     """If close to a beat grid, stretch by <2% to align."""
@@ -408,7 +327,6 @@ def compose_sections(
     sr = TARGET_SR
     xf_sec = float(xf_beats) * 60.0 / max(1.0, float(bpm))
     xf_sec = max(0.8, min(1.2, xf_sec))
-    prev = _prep_to_32k(init_audio, device=UTILITY_DEVICE) if init_audio else None
     assembled = None
     for sec in sections:
         if sec["type"] in STYLE_SECTIONS:
@@ -424,12 +342,7 @@ def compose_sections(
         best_wav = None
         best_score = -1e9
         for _ in range(int(candidates)):
-            if prev is not None:
-                out = _musicgen_continue_compat(model, sec["prompt"], prev, sr, return_tokens=(decoder == "MultiBand_Diffusion"))
-                if out is None:
-                    out = model.generate([sec["prompt"]], return_tokens=(decoder == "MultiBand_Diffusion"))
-            else:
-                out = model.generate([sec["prompt"]], return_tokens=(decoder == "MultiBand_Diffusion"))
+            out = model.generate([sec["prompt"]], return_tokens=(decoder == "MultiBand_Diffusion"))
             if decoder == "MultiBand_Diffusion" and STYLE_MBD is not None:
                 tokens = out[1] if isinstance(out, (tuple, list)) and len(out) > 1 else out[0]
                 tokens = tokens.to(STYLE_MBD.device)
@@ -445,7 +358,6 @@ def compose_sections(
             raise gr.Error("Section generation failed.")
         best_wav = _time_stretch_to_grid(best_wav, sec["length"], sr, bpm)
         assembled = best_wav if assembled is None else _crossfade_concat(assembled, best_wav, sr, xf_sec=xf_sec)
-        prev = best_wav.unsqueeze(0)
         torch.cuda.empty_cache()
     return _write_wav(assembled, sr, stem="sections", trim_db=float(out_trim_db))
 
@@ -587,10 +499,7 @@ def audiogen_continuation(
     crossfade_sec: float = 1.25,   # slightly shorter to avoid hot sums
     out_trim_db: float = -3.0,
 ):
-    """
-    Use AudioGen’s continuation if available; otherwise emulate continuation by
-    generating fresh audio and equal-power crossfading onto the input tail.
-    """
+    """Emulate continuation by generating fresh audio and crossfading onto the input tail."""
     if audio_input is None:
         raise gr.Error("Please provide an input audio clip.")
 
@@ -610,17 +519,8 @@ def audiogen_continuation(
         cfg_coef=float(cfg_coef),
     )
 
-    # 3) Try real continuation via compatibility shim
-    out = _audiogen_continue_compat(model, prompt, tail, TARGET_SR)
-    if out is not None:
-        batch = _extract_audio_batch(out)          # (B,C,T) or similar
-        wav = batch.detach().cpu().float()[0]      # (C,T)
-        if _rms(wav) < 1e-6:
-            raise gr.Error("AudioGen continuation returned near-silence.")
-        return _write_wav(wav, TARGET_SR, stem="audiogen_cont", trim_db=float(out_trim_db))
-
-    # 4) Fallback: emulate continuation with crossfade
-    print("[AudioGen] Continuation API unavailable – emulating via crossfade.")
+    # 3) Emulate continuation with crossfade
+    print("[AudioGen] Generating new segment for crossfade continuation.")
     gen_out = model.generate([prompt])             # -> Tensor[B,C,T] or similar
     gen_batch = _extract_audio_batch(gen_out)
     gen = gen_batch.detach().cpu().float()[0]      # (C,T)
