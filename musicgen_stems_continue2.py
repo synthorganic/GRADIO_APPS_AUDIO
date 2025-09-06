@@ -38,7 +38,11 @@ except ImportError:
 # ---------- Devices [ALTERED] ----------
 STYLE_DEVICE = torch.device("cuda:1")       # Style pinned to GPU1
 AUDIOGEN_DEVICE = torch.device("cuda:0")    # AudioGen on GPU0
-UTILITY_DEVICE = torch.device("cuda:3") if (torch.cuda.is_available() and torch.cuda.device_count() > 3) else torch.device("cpu")
+UTILITY_DEVICE = (
+    torch.device("cuda:3")
+    if torch.cuda.is_available() and torch.cuda.device_count() > 3
+    else torch.device("cpu")
+)
 
 print(f"[Boot] STYLE: {STYLE_DEVICE} | AUDIOGEN: {AUDIOGEN_DEVICE} | UTILITY(preproc/demucs): {UTILITY_DEVICE}")
 
@@ -586,6 +590,38 @@ def _master_complex(audio_input, out_trim_db: float = -1.0):
         cleaned.append(c_path)
         mastered.append(m_path)
 
+    # Apply drum compression and sidechain ducking for other stems (kick/snare focus)
+    if len(mastered) != 4:
+        raise gr.Error(f"Expected 4 stems (drums, vocals, bass, other); got {len(mastered)}")
+
+    mix_path = TMP_DIR / f"mastered_complex_{uuid.uuid4().hex}.wav"
+    cmd = [
+        "ffmpeg",
+        "-y",
+        "-i",
+        str(mastered[0]),  # drums
+        "-i",
+        str(mastered[1]),  # vocals
+        "-i",
+        str(mastered[2]),  # bass
+        "-i",
+        str(mastered[3]),  # other
+        "-filter_complex",
+        (
+            "[0:a]acompressor=attack=5:release=50:threshold=-10:ratio=4:makeup=4[dr];"
+            "[dr]asplit=3[dr_mix][dr_k][dr_s];"
+            "[dr_k]lowpass=f=120[sc_k];"
+            "[dr_s]bandpass=f=200:w=200[sc_s];"
+            "[1:a][sc_k]sidechaincompress=threshold=0.1:ratio=6:attack=5:release=50[v1];"
+            "[v1][sc_s]sidechaincompress=threshold=0.1:ratio=6:attack=5:release=50[voc_sc];"
+            "[2:a][sc_k]sidechaincompress=threshold=0.1:ratio=6:attack=5:release=50[b1];"
+            "[b1][sc_s]sidechaincompress=threshold=0.1:ratio=6:attack=5:release=50[bass_sc];"
+            "[3:a][sc_k]sidechaincompress=threshold=0.1:ratio=6:attack=5:release=50[o1];"
+            "[o1][sc_s]sidechaincompress=threshold=0.1:ratio=6:attack=5:release=50[other_sc];"
+            "[dr_mix][voc_sc][bass_sc][other_sc]amix=inputs=4:normalize=0"
+        ),
+        str(mix_path),
+    ]
     mix_path = TMP_DIR / f"mastered_complex_{uuid.uuid4().hex}.wav"
     cmd = ["ffmpeg", "-y"]
     for m in mastered:
