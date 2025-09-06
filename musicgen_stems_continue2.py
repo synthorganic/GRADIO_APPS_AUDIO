@@ -689,6 +689,20 @@ def _apply_stereo_space(in_path: Path, out_path: Path, width: float = 1.5, pan: 
         sp.run(fallback, check=True)
 
 
+def _beat_match_and_harmonize(stem_paths: list[Path], out_path: Path) -> None:
+    """Recombine stems with basic beat matching and harmonization.
+
+    Uses ffmpeg's ``amix`` to sum the stems and ``aresample=async`` to keep
+    streams aligned. Acts as a lightweight placeholder for more advanced
+    alignment or key detection.
+    """
+    cmd = ["ffmpeg", "-y"]
+    for p in stem_paths:
+        cmd.extend(["-i", str(p)])
+    filter_complex = f"amix=inputs={len(stem_paths)}:normalize=0,aresample=async=1"
+    cmd.extend(["-filter_complex", filter_complex, str(out_path)])
+    sp.run(cmd, check=True)
+
 
 def _master_simple(audio_input, out_trim_db: float = -1.0):
     if not MATCHERING_AVAILABLE:
@@ -710,6 +724,7 @@ def _master_simple(audio_input, out_trim_db: float = -1.0):
 
 
 def _master_complex(audio_input, out_trim_db: float = -1.0):
+    """Complex mastering pipeline with per-stem Matchering and recombination."""
     if not MATCHERING_AVAILABLE:
         raise gr.Error("Matchering not installed. `pip install matchering`")
     if not DEMUCS_AVAILABLE:
@@ -719,72 +734,34 @@ def _master_complex(audio_input, out_trim_db: float = -1.0):
     if not ref.exists():
         raise gr.Error(f"Reference file missing: {ref}")
 
-    cleaned = []
-    mastered = []
+    processed = []
     for stem_path in stems:
         stem_p = Path(stem_path)
-        c_path = TMP_DIR / f"clean_{stem_p.stem}_{uuid.uuid4().hex}.wav"
-        _ffmpeg_basic_cleanup(stem_p, c_path)
-        m_path = TMP_DIR / f"master_{stem_p.stem}_{uuid.uuid4().hex}.wav"
-        _matchering_match(target=str(c_path), reference=str(ref), output=str(m_path))
+        p_path = TMP_DIR / f"proc_{stem_p.stem}_{uuid.uuid4().hex}.wav"
+        _ffmpeg_basic_cleanup(stem_p, p_path)
 
-        # Harmonic excitement on vocals and other (synth) layers
         if stem_p.stem in {"vocals", "other"}:
             freq = 4000 if stem_p.stem == "vocals" else 8000
             e_path = TMP_DIR / f"excite_{stem_p.stem}_{uuid.uuid4().hex}.wav"
-            _apply_harmonic_exciter(m_path, e_path, freq)
-            m_path = e_path
+            _apply_harmonic_exciter(p_path, e_path, freq)
+            p_path = e_path
+
+        m_path = TMP_DIR / f"master_{stem_p.stem}_{uuid.uuid4().hex}.wav"
+        _matchering_match(target=str(p_path), reference=str(ref), output=str(m_path))
 
         w_path = TMP_DIR / f"stereo_{stem_p.stem}_{uuid.uuid4().hex}.wav"
         _apply_stereo_space(m_path, w_path)
-        m_path = w_path
+        processed.append(w_path)
 
-        cleaned.append(c_path)
-        mastered.append(m_path)
+    if len(processed) != 4:
+        raise gr.Error(f"Expected 4 stems (drums, vocals, bass, other); got {len(processed)}")
 
-    # Apply drum compression and sidechain ducking for other stems (kick/snare focus)
-    if len(mastered) != 4:
-        raise gr.Error(f"Expected 4 stems (drums, vocals, bass, other); got {len(mastered)}")
+    mix_path = TMP_DIR / f"mix_{uuid.uuid4().hex}.wav"
+    _beat_match_and_harmonize(processed, mix_path)
 
-    mix_path = TMP_DIR / f"mastered_complex_{uuid.uuid4().hex}.wav"
-    cmd = [
-        "ffmpeg",
-        "-y",
-        "-i",
-        str(mastered[0]),  # drums
-        "-i",
-        str(mastered[1]),  # vocals
-        "-i",
-        str(mastered[2]),  # bass
-        "-i",
-        str(mastered[3]),  # other
-        "-filter_complex",
-        (
-            "[0:a]acompressor=attack=5:release=50:threshold=-10:ratio=4:makeup=4[dr];"
-            "[dr]asplit=3[dr_mix][dr_k][dr_s];"
-            "[dr_k]lowpass=f=120[sc_k];"
-            "[dr_s]bandpass=f=200:w=200[sc_s];"
-            "[1:a][sc_k]sidechaincompress=threshold=0.1:ratio=6:attack=5:release=50[v1];"
-            "[v1][sc_s]sidechaincompress=threshold=0.1:ratio=6:attack=5:release=50[voc_sc];"
-            "[2:a][sc_k]sidechaincompress=threshold=0.1:ratio=6:attack=5:release=50[b1];"
-            "[b1][sc_s]sidechaincompress=threshold=0.1:ratio=6:attack=5:release=50[bass_sc];"
-            "[3:a][sc_k]sidechaincompress=threshold=0.1:ratio=6:attack=5:release=50[o1];"
-            "[o1][sc_s]sidechaincompress=threshold=0.1:ratio=6:attack=5:release=50[other_sc];"
-            "[dr_mix][voc_sc][bass_sc][other_sc]amix=inputs=4:normalize=0"
-        ),
-        str(mix_path),
-    ]
-    mix_path = TMP_DIR / f"mastered_complex_{uuid.uuid4().hex}.wav"
-    cmd = ["ffmpeg", "-y"]
-    for m in mastered:
-        cmd.extend(["-i", str(m)])
-    cmd.extend([
-        "-filter_complex",
-        f"amix=inputs={len(mastered)}:normalize=0",
-        str(mix_path),
-    ])
-    sp.run(cmd, check=True)
-    return str(mix_path)
+    final_path = TMP_DIR / f"mastered_complex_{uuid.uuid4().hex}.wav"
+    _matchering_match(target=str(mix_path), reference=str(ref), output=str(final_path))
+    return str(final_path)
 
 
 def master_track(audio_input, pathway: str, out_trim_db: float = -1.0):
