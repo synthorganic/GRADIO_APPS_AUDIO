@@ -703,55 +703,6 @@ def separate_stems(audio_input):
         str(stem_dir / "other.wav"),
     )
 
-# ============================================================================
-# MASTERING TAB UTILITIES [NEW]
-# ============================================================================
-
-def _ffmpeg_basic_cleanup(in_path: Path, out_path: Path, sr: int) -> None:
-    """Apply basic corrective EQ via ffmpeg to mitigate common artefacts."""
-    hums = [50, 60, 100, 120, 150, 180]
-    filters = ["highpass=f=30", "highpass=f=40"]
-    # ``equalizer`` is widely available in ffmpeg whereas ``anequalizer``
-    # lacks the "f" option on older builds.  Using ``equalizer`` avoids
-    # "Option 'f' not found" runtime failures.  Make reductions 10x subtler.
-    filters += [f"equalizer=f={h}:t=o:w=2:g=-2.5" for h in hums]
-    if 15600 < TARGET_SR / 2:
-        filters.append("equalizer=f=15600:t=o:w=2:g=-2.5")
-    filters.append("lowpass=f=18000")
-    cmd = [
-        "ffmpeg",
-        "-y",
-        "-i",
-        str(in_path),
-        "-af",
-        ",".join(filters),
-        "-ar",
-        str(sr),
-        "-sample_fmt",
-        "s32",
-        str(out_path),
-    ]
-    sp.run(cmd, check=True)
-
-
-def _apply_harmonic_exciter(in_path: Path, out_path: Path, freq: float, sr: int) -> None:
-    """Light harmonic excitement using ffmpeg's aexciter filter."""
-    cmd = [
-        "ffmpeg",
-        "-y",
-        "-i",
-        str(in_path),
-        "-af",
-        f"aexciter=freq={freq}:amount=0.1",
-        "-ar",
-        str(sr),
-        "-sample_fmt",
-        "s32",
-        str(out_path),
-    ]
-    sp.run(cmd, check=True)
-
-
 def _matchering_match(target: str, reference: str, output: str) -> None:
     """Call Matchering's matching via API fallbacks or CLI.
 
@@ -843,22 +794,29 @@ def _apply_stereo_space(in_path: Path, out_path: Path, sr: int, width: float = 1
         sp.run(fallback, check=True)
 
 
-def _beat_match_and_harmonize(stem_paths: list[Path], out_path: Path, sr: int) -> None:
-    """Recombine stems with basic beat matching and harmonization.
-
-    Uses ffmpeg's ``amix`` to sum the stems and ``aresample=async`` to keep
-    streams aligned. Acts as a lightweight placeholder for more advanced
-    alignment or key detection.
-    """
-    cmd = ["ffmpeg", "-y"]
-    for p in stem_paths:
-        cmd.extend(["-i", str(p)])
-    filter_complex = f"amix=inputs={len(stem_paths)}:normalize=0,aresample=async=1"
-    cmd.extend(["-filter_complex", filter_complex, "-ar", str(sr), "-sample_fmt", "s32", str(out_path)])
+def _apply_bass_boost(in_path: Path, out_path: Path, sr: int, gain_db: float) -> None:
+    """Apply a simple low shelf boost using ffmpeg's bass filter."""
+    if abs(gain_db) < 1e-6:
+        shutil.copyfile(in_path, out_path)
+        return
+    cmd = [
+        "ffmpeg",
+        "-y",
+        "-i",
+        str(in_path),
+        "-af",
+        f"bass=g={gain_db}",
+        "-ar",
+        str(sr),
+        "-sample_fmt",
+        "s32",
+        str(out_path),
+    ]
     sp.run(cmd, check=True)
 
 
-def _master_simple(audio_input, out_trim_db: float = -1.0):
+def _master_simple(audio_input, reference_audio: str | None = None, out_trim_db: float = -1.0,
+                   width: float = 1.5, pan: float = 0.0, bass_boost_db: float = 0.0):
     if not MATCHERING_AVAILABLE:
         raise gr.Error("Matchering not installed. `pip install matchering`")
     try:
@@ -867,67 +825,24 @@ def _master_simple(audio_input, out_trim_db: float = -1.0):
         raise gr.Error("Please provide an audio clip.")
     in_path = TMP_DIR / f"master_in_{uuid.uuid4().hex}.wav"
     audio_write(str(in_path), torch.from_numpy(wav_np).float().t(), sr, add_suffix=False)
-    ref = Path.home() / "references" / "reference.wav"
+    if reference_audio:
+        ref = Path(reference_audio)
+    else:
+        ref = Path.home() / "references" / "reference.wav"
     if not ref.exists():
         raise gr.Error(f"Reference file missing: {ref}")
     matched_path = TMP_DIR / f"mastered_simple_{uuid.uuid4().hex}.wav"
     _matchering_match(target=str(in_path), reference=str(ref), output=str(matched_path))
+    bass_path = TMP_DIR / f"mastered_simple_bass_{uuid.uuid4().hex}.wav"
+    _apply_bass_boost(matched_path, bass_path, sr, bass_boost_db)
     widened_path = TMP_DIR / f"mastered_simple_wide_{uuid.uuid4().hex}.wav"
-    _apply_stereo_space(matched_path, widened_path, sr)
+    _apply_stereo_space(bass_path, widened_path, sr, width=width, pan=pan)
     return str(widened_path)
 
 
-def _master_complex(audio_input, out_trim_db: float = -1.0):
-    """Complex mastering pipeline with per-stem Matchering and recombination."""
-    if not MATCHERING_AVAILABLE:
-        raise gr.Error("Matchering not installed. `pip install matchering`")
-    if not DEMUCS_AVAILABLE:
-        raise gr.Error("Demucs not installed. `pip install demucs`")
-    try:
-        sr, _ = audio_input
-    except Exception:
-        raise gr.Error("Please provide an audio clip.")
-    stems = separate_stems(audio_input)
-    ref = Path.home() / "references" / "reference.wav"
-    if not ref.exists():
-        raise gr.Error(f"Reference file missing: {ref}")
-
-    processed = []
-    for stem_path in stems:
-        stem_p = Path(stem_path)
-        p_path = TMP_DIR / f"proc_{stem_p.stem}_{uuid.uuid4().hex}.wav"
-        _ffmpeg_basic_cleanup(stem_p, p_path, sr)
-
-        if stem_p.stem in {"vocals", "other"}:
-            freq = 4000 if stem_p.stem == "vocals" else 8000
-            e_path = TMP_DIR / f"excite_{stem_p.stem}_{uuid.uuid4().hex}.wav"
-            _apply_harmonic_exciter(p_path, e_path, freq, sr)
-            p_path = e_path
-
-        m_path = TMP_DIR / f"master_{stem_p.stem}_{uuid.uuid4().hex}.wav"
-        _matchering_match(target=str(p_path), reference=str(ref), output=str(m_path))
-
-        w_path = TMP_DIR / f"stereo_{stem_p.stem}_{uuid.uuid4().hex}.wav"
-        _apply_stereo_space(m_path, w_path, sr)
-        processed.append(w_path)
-
-    if len(processed) != 4:
-        raise gr.Error(f"Expected 4 stems (drums, vocals, bass, other); got {len(processed)}")
-
-    mix_path = TMP_DIR / f"mix_{uuid.uuid4().hex}.wav"
-    _beat_match_and_harmonize(processed, mix_path, sr)
-
-    final_path = TMP_DIR / f"mastered_complex_{uuid.uuid4().hex}.wav"
-    _matchering_match(target=str(mix_path), reference=str(ref), output=str(final_path))
-    resamp_path = TMP_DIR / f"mastered_complex_sr_{uuid.uuid4().hex}.wav"
-    sp.run(["ffmpeg", "-y", "-i", str(final_path), "-ar", str(sr), "-sample_fmt", "s32", str(resamp_path)], check=True)
-    return str(resamp_path)
-
-
-def master_track(audio_input, pathway: str, out_trim_db: float = -1.0):
-    if pathway == "Simple":
-        return _master_simple(audio_input, out_trim_db)
-    return _master_complex(audio_input, out_trim_db)
+def master_track(audio_input, reference_audio: str | None, out_trim_db: float = -1.0,
+                 width: float = 1.5, pan: float = 0.0, bass_boost_db: float = 0.0):
+    return _master_simple(audio_input, reference_audio, out_trim_db, width, pan, bass_boost_db)
 
 # ============================================================================
 # UI (tabs, all Enqueue) [ALTERED]
@@ -1060,11 +975,19 @@ def ui_full(launch_kwargs):
         # ----- MASTERING -----
         with gr.Tab("Mastering"):
             audio_in3 = gr.Audio(label="Input Track", type="numpy")
-            pathway = gr.Radio(["Simple", "Complex"], value="Simple", label="Pathway")
+            ref_master = gr.Audio(label="Reference Track", type="filepath")
             out_trim_master = gr.Slider(-24.0, 0.0, value=-1.0, step=0.5, label="Output Trim (dB)")
+            width_master = gr.Slider(0.5, 3.0, value=1.5, step=0.1, label="Stereo Width")
+            pan_master = gr.Slider(-1.0, 1.0, value=0.0, step=0.1, label="Stereo Pan")
+            bass_master = gr.Slider(0.0, 12.0, value=0.0, step=0.5, label="Bass Boost (dB)")
             out_master = gr.Audio(label="Output", type="filepath")
             btn_master = gr.Button("Enqueue", variant="primary")
-            btn_master.click(master_track, inputs=[audio_in3, pathway, out_trim_master], outputs=out_master, queue=True)
+            btn_master.click(
+                master_track,
+                inputs=[audio_in3, ref_master, out_trim_master, width_master, pan_master, bass_master],
+                outputs=out_master,
+                queue=True,
+            )
 
         # Global queue
         demo.queue(concurrency_count=1, max_size=32).launch(**launch_kwargs)
