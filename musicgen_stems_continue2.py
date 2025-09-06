@@ -172,6 +172,30 @@ def _move_musicgen(model, device: torch.device):
         # Fallback for potential mocks or minimal stubs in tests.
         model.device = device
 
+    # ``set_device`` on ``MusicGen`` does not always propagate the target
+    # device to nested conditioner objects or to the lazily loaded HuggingFace
+    # T5 model.  If the text conditioner is instantiated after ``set_device``
+    # runs, it would default to CUDA:0, leading to ``Expected all tensors to be
+    # on the same device`` errors during generation.  Explicitly update the
+    # condition provider and any child conditioners here and move any existing
+    # tensors they may already hold.
+    try:  # ``model`` may not have an ``lm`` attribute in lightweight tests
+        provider = model.lm.condition_provider
+    except AttributeError:
+        return
+
+    # Update provider level device attribute
+    if hasattr(provider, "device"):
+        provider.device = device
+
+    # Individual conditioners (e.g. text/T5) may have their own ``device``
+    # attribute and internal tensors that need relocation.
+    conds = getattr(provider, "conditioners", {})
+    for cond in conds.values():
+        if hasattr(cond, "device"):
+            cond.device = device
+        _move_to_device(cond, device)
+
 
 def _offload_musicgen(model):
     """Push ``model`` back to CPU and free the current CUDA cache."""
