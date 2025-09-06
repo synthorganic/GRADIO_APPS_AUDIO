@@ -38,7 +38,11 @@ except ImportError:
 # ---------- Devices [ALTERED] ----------
 STYLE_DEVICE = torch.device("cuda:1")       # Style pinned to GPU1
 AUDIOGEN_DEVICE = torch.device("cuda:0")    # AudioGen on GPU0
-UTILITY_DEVICE = torch.device("cuda:3") if (torch.cuda.is_available() and torch.cuda.device_count() > 3) else torch.device("cpu")
+UTILITY_DEVICE = (
+    torch.device("cuda:3")
+    if torch.cuda.is_available() and torch.cuda.device_count() > 3
+    else torch.device("cpu")
+)
 
 print(f"[Boot] STYLE: {STYLE_DEVICE} | AUDIOGEN: {AUDIOGEN_DEVICE} | UTILITY(preproc/demucs): {UTILITY_DEVICE}")
 
