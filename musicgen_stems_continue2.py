@@ -779,8 +779,6 @@ def _apply_stereo_space(in_path: Path, out_path: Path, sr: int, width: float = 1
         f"stereotools=slev={width_s}:balance_out={pan_s}",
         "-ar",
         str(sr),
-        "-sample_fmt",
-        "s32",
         str(out_path),
     ]
     try:
@@ -795,8 +793,6 @@ def _apply_stereo_space(in_path: Path, out_path: Path, sr: int, width: float = 1
             f"stereowiden=delay=20:feedback=0.3:crossfeed={max(0.0, width_s - 1.0)}:drymix=0.8",
             "-ar",
             str(sr),
-            "-sample_fmt",
-            "s32",
             str(out_path),
         ]
         sp.run(fallback, check=True)
@@ -816,8 +812,6 @@ def _apply_bass_boost(in_path: Path, out_path: Path, sr: int, gain_db: float) ->
         f"bass=g={gain_db}",
         "-ar",
         str(sr),
-        "-sample_fmt",
-        "s32",
         str(out_path),
     ]
     sp.run(cmd, check=True)
@@ -836,7 +830,7 @@ def _master_simple(audio_input, reference_audio: str | None = None, out_trim_db:
     if reference_audio:
         ref = Path(reference_audio)
     else:
-        ref = Path.home() / "references" / "reference.wav"
+        ref = Path("/references/reference.wav")
     if not ref.exists():
         raise gr.Error(f"Reference file missing: {ref}")
     matched_path = TMP_DIR / f"mastered_simple_{uuid.uuid4().hex}.wav"
