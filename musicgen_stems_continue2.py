@@ -40,15 +40,21 @@ except ImportError:
     MATCHERING_AVAILABLE = False
 
 # ---------- Devices [ALTERED] ----------
-# Spread heavy composer workloads across the first three GPUs so each
-# model occupies its own device and memory usage remains manageable.
-STYLE_DEVICE = torch.device("cuda:0")        # Style model on GPU0
-MEDIUM_DEVICE = torch.device("cuda:1")       # MusicGen-medium on GPU1
-LARGE_DEVICE = torch.device("cuda:2")        # MusicGen-large on GPU2
-AUDIOGEN_DEVICE = torch.device("cuda:1")     # AudioGen shares GPU1
+# Push section-composer workloads onto GPUs 2 & 3 so that heavy MusicGen
+# models can be swapped in and out without exhausting memory.  Style and
+# large models share GPU2 while the medium model lives on GPU3 when
+# available.  AudioGen remains on GPU1.
+STYLE_DEVICE = torch.device("cuda:2")        # Style model on GPU2
+MEDIUM_DEVICE = (
+    torch.device("cuda:3")
+    if torch.cuda.is_available() and torch.cuda.device_count() > 3
+    else torch.device("cuda:2")
+)
+LARGE_DEVICE = STYLE_DEVICE                  # Large shares GPU2
+AUDIOGEN_DEVICE = torch.device("cuda:1")     # AudioGen on GPU1
 UTILITY_DEVICE = (
-    torch.device("cuda:2")
-    if torch.cuda.is_available() and torch.cuda.device_count() > 2
+    torch.device("cuda:3")
+    if torch.cuda.is_available() and torch.cuda.device_count() > 3
     else torch.device("cpu")
 )
 
@@ -138,6 +144,20 @@ def _move_to_device(obj, device: torch.device, _seen: set[int] | None = None):
             else:
                 _move_to_device(val, device, _seen)
     return obj
+
+
+def _move_musicgen(model, device: torch.device):
+    """Relocate a ``MusicGen`` model and all of its tensors."""
+    if model is None:
+        return
+    _move_to_device(model, device)
+    model.device = device
+
+
+def _offload_musicgen(model):
+    """Push ``model`` back to CPU and free the current CUDA cache."""
+    _move_musicgen(model, torch.device("cpu"))
+    torch.cuda.empty_cache()
 
 def _prep_to_32k(audio_input, take_last_seconds: float | None = None, device: torch.device = UTILITY_DEVICE) -> torch.Tensor:
     """Return mono 32k tensor on device; optionally last N seconds only."""
@@ -315,29 +335,48 @@ def compose_sections(
     decoder: str = "Default",
     out_trim_db: float = -3.0,
     candidates: int = 2,
-):
+): 
     """Compose sequential sections with model chaining."""
     if not sections:
         raise gr.Error("No sections provided.")
-    style_load_model()
-    medium_load_model()
-    large_load_model()
-    if decoder == "MultiBand_Diffusion":
-        style_load_diffusion()
+    # Start with all heavy models on CPU to free up GPU memory.
+    _offload_style()
+    _offload_musicgen(MEDIUM_MODEL)
+    _offload_musicgen(LARGE_MODEL)
+
     sr = TARGET_SR
     xf_sec = float(xf_beats) * 60.0 / max(1.0, float(bpm))
     xf_sec = max(0.8, min(1.2, xf_sec))
     assembled = None
+    active = None
     for sec in sections:
         if sec["type"] in STYLE_SECTIONS:
+            style_load_model()
+            if decoder == "MultiBand_Diffusion":
+                style_load_diffusion()
             model = STYLE_MODEL
             device = STYLE_DEVICE
+            key = "style"
         else:
+            medium_load_model()
             model = MEDIUM_MODEL
             device = MEDIUM_DEVICE
-        # ensure subsequent ops run on the correct device
-        torch.cuda.set_device(device)
-        model.device = device
+            key = "medium"
+
+        if key != active:
+            if active == "style":
+                _offload_style()
+            elif active == "medium":
+                _offload_musicgen(MEDIUM_MODEL)
+            _move_musicgen(model, device)
+            if key == "style" and decoder == "MultiBand_Diffusion" and STYLE_MBD is not None:
+                _move_to_device(STYLE_MBD, device)
+                STYLE_MBD.device = device
+            torch.cuda.set_device(device)
+            active = key
+        else:
+            torch.cuda.set_device(device)
+
         model.set_generation_params(duration=int(sec["length"]))
         best_wav = None
         best_score = -1e9
@@ -359,6 +398,12 @@ def compose_sections(
         best_wav = _time_stretch_to_grid(best_wav, sec["length"], sr, bpm)
         assembled = best_wav if assembled is None else _crossfade_concat(assembled, best_wav, sr, xf_sec=xf_sec)
         torch.cuda.empty_cache()
+
+    if active == "style":
+        _offload_style()
+    elif active == "medium":
+        _offload_musicgen(MEDIUM_MODEL)
+
     return _write_wav(assembled, sr, stem="sections", trim_db=float(out_trim_db))
 
 
@@ -384,10 +429,10 @@ def compose_sections_ui(init_audio, count, *vals):
 def style_load_model():
     global STYLE_MODEL
     if STYLE_MODEL is None:
-        print(f"[Style] Loading facebook/musicgen-style on {STYLE_DEVICE}")
+        print("[Style] Loading facebook/musicgen-style")
         STYLE_MODEL = MusicGen.get_pretrained("facebook/musicgen-style")
-        STYLE_MODEL.device = STYLE_DEVICE  # MusicGen isn't nn.Module; don't call .to()
-
+        _move_musicgen(STYLE_MODEL, torch.device("cpu"))
+    
 def style_load_diffusion():
     global STYLE_MBD
     if STYLE_MBD is None:
@@ -397,18 +442,24 @@ def style_load_diffusion():
         # ``.to(device)`` call can leave internal tensors (e.g. quantizer
         # codebooks) on their original device.  Use the recursive helper to
         # ensure *everything* lives on ``STYLE_DEVICE``.
-        _move_to_device(STYLE_MBD, STYLE_DEVICE)
-        # track device manually for downstream checks
-        STYLE_MBD.device = STYLE_DEVICE
+        _move_to_device(STYLE_MBD, torch.device("cpu"))
+        STYLE_MBD.device = torch.device("cpu")
+
+
+def _offload_style():
+    _offload_musicgen(STYLE_MODEL)
+    if STYLE_MBD is not None:
+        _move_to_device(STYLE_MBD, torch.device("cpu"))
+        STYLE_MBD.device = torch.device("cpu")
 
 
 def medium_load_model():
     """Lazy-load facebook/musicgen-medium on MEDIUM_DEVICE."""
     global MEDIUM_MODEL
     if MEDIUM_MODEL is None:
-        print(f"[Medium] Loading facebook/musicgen-medium on {MEDIUM_DEVICE}")
+        print("[Medium] Loading facebook/musicgen-medium")
         MEDIUM_MODEL = MusicGen.get_pretrained("facebook/musicgen-medium")
-        MEDIUM_MODEL.device = MEDIUM_DEVICE
+        _move_musicgen(MEDIUM_MODEL, torch.device("cpu"))
     return MEDIUM_MODEL
 
 
@@ -416,9 +467,9 @@ def large_load_model():
     """Lazy-load facebook/musicgen-large on LARGE_DEVICE."""
     global LARGE_MODEL
     if LARGE_MODEL is None:
-        print(f"[Large] Loading facebook/musicgen-large on {LARGE_DEVICE}")
+        print("[Large] Loading facebook/musicgen-large")
         LARGE_MODEL = MusicGen.get_pretrained("facebook/musicgen-large")
-        LARGE_MODEL.device = LARGE_DEVICE
+        _move_musicgen(LARGE_MODEL, torch.device("cpu"))
     return LARGE_MODEL
 
 
@@ -428,6 +479,7 @@ def style_predict(text, melody, duration=10, topk=250, topp=0.0, temperature=1.0
                   out_trim_db=-3.0):
     """Generate with MusicGen-Style, optional melody excerpt."""
     style_load_model()
+    _move_musicgen(STYLE_MODEL, STYLE_DEVICE)
     STYLE_MODEL.set_generation_params(duration=int(duration),
                                       top_k=int(topk), top_p=float(topp),
                                       temperature=float(temperature),
@@ -441,6 +493,9 @@ def style_predict(text, melody, duration=10, topk=250, topp=0.0, temperature=1.0
     if decoder == "MultiBand_Diffusion":
         STYLE_USE_DIFFUSION = True
         style_load_diffusion()
+        if STYLE_MBD is not None:
+            _move_to_device(STYLE_MBD, STYLE_DEVICE)
+            STYLE_MBD.device = STYLE_DEVICE
     else:
         STYLE_USE_DIFFUSION = False
 
@@ -801,7 +856,7 @@ def ui_full(launch_kwargs):
         gr.Markdown("# 🎛️ Music Suite — Style • AudioGen Continuation • Stems  \n*Enqueue buttons; global queue enabled*")
 
         # ----- STYLE -----
-        with gr.Tab("Style (MusicGen-Style, GPU1)"):
+        with gr.Tab("Style (MusicGen-Style, GPU2)"):
             with gr.Row():
                 text = gr.Textbox(label="Text Prompt", placeholder="e.g., glossy synthwave with gated drums")
                 melody = gr.Audio(label="Style Excerpt (optional)", type="numpy")
