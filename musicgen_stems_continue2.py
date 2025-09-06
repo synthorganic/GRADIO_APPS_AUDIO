@@ -185,60 +185,6 @@ def _write_wav(wav_ct: torch.Tensor, sr: int, stem: str = "out", trim_db: float 
     TMP_DIR.mkdir(parents=True, exist_ok=True)
 
     wav_ct = _postprocess_out(wav_ct, peak_ceiling_db=peak_db, trim_db=trim_db)
-To create a public link, set `share=True` in `launch()`.
-IMPORTANT: You are using gradio version 3.50.2, however version 4.44.1 is available, please upgrade.
---------
-ffmpeg version 4.4.2-0ubuntu0.22.04.1
-  built with gcc 11 (Ubuntu 11.2.0-19ubuntu1)
-  configuration: --prefix=/usr --extra-version=0ubuntu0.22.04.1 --toolchain=hardened --libdir=/usr/lib/x86_64-linux-gnu --incdir=/usr/include/x86_64-linux-gnu --arch=amd64 --enable-gpl --disable-stripping --enable-gnutls --enable-ladspa --enable-libaom --enable-libass --enable-libbluray --enable-libbs2b --enable-libcaca --enable-libcdio --enable-libcodec2 --enable-libdav1d --enable-libflite --enable-libfontconfig --enable-libfreetype --enable-libfribidi --enable-libgme --enable-libgsm --enable-libjack --enable-libmp3lame --enable-libmysofa --enable-libopenjpeg --enable-libopenmpt --enable-libopus --enable-libpulse --enable-librabbitmq --enable-librubberband --enable-libshine --enable-libsnappy --enable-libsoxr --enable-libspeex --enable-libsrt --enable-libssh --enable-libtheora --enable-libtwolame --enable-libvidstab --enable-libvorbis --enable-libvpx --enable-libwebp --enable-libx265 --enable-libxml2 --enable-libxvid --enable-libzimg --enable-libzmq --enable-libzvbi --enable-lv2 --enable-omx --enable-openal --enable-opencl --enable-opengl --enable-sdl2 --enable-pocketsphinx --enable-librsvg --enable-libmfx --enable-libdc1394 --enable-libdrm --enable-libiec61883 --enable-chromaprint --enable-frei0r --enable-libx264 --enable-shared
-  libavutil      56. 70.100 / 56. 70.100
-  libavcodec     58.134.100 / 58.134.100
-  libavformat    58. 76.100 / 58. 76.100
-  libavdevice    58. 13.100 / 58. 13.100
-  libavfilter     7.110.100 /  7.110.100
-  libswscale      5.  9.100 /  5.  9.100
-  libswresample   3.  9.100 /  3.  9.100
-  libpostproc    55.  9.100 / 55.  9.100
-Guessed Channel Layout for Input Stream #0.0 : stereo
-Input #0, wav, from '/home/archway/music/n-Track/mastered_simple_bf24488ab5c349d4836503e5caa26150.wav':
-  Duration: 00:00:37.75, bitrate: 1411 kb/s
-  Stream #0:0: Audio: pcm_s16le ([1][0][0][0] / 0x0001), 44100 Hz, stereo, s16, 1411 kb/s
-Stream mapping:
-  Stream #0:0 -> #0:0 (pcm_s16le (native) -> pcm_s16le (native))
-Press [q] to stop, [?] for help
-[Parsed_stereotools_0 @ 0x623532d72140] Option 'width' not found
-[AVFilterGraph @ 0x623532d22d80] Error initializing filter 'stereotools' with args 'width=1.5:balance_out=0.0'
-Error reinitializing filters!
-Failed to inject frame into filter network: Option not found
-Error while processing the decoded data for stream #0:0
-Conversion failed!
-Traceback (most recent call last):
-  File "/home/archway/venv_musicgen/lib/python3.10/site-packages/gradio/queueing.py", line 407, in call_prediction
-    output = await route_utils.call_process_api(
-  File "/home/archway/venv_musicgen/lib/python3.10/site-packages/gradio/route_utils.py", line 226, in call_process_api
-    output = await app.get_blocks().process_api(
-  File "/home/archway/venv_musicgen/lib/python3.10/site-packages/gradio/blocks.py", line 1550, in process_api
-    result = await self.call_function(
-  File "/home/archway/venv_musicgen/lib/python3.10/site-packages/gradio/blocks.py", line 1185, in call_function
-    prediction = await anyio.to_thread.run_sync(
-  File "/home/archway/venv_musicgen/lib/python3.10/site-packages/anyio/to_thread.py", line 56, in run_sync
-    return await get_async_backend().run_sync_in_worker_thread(
-  File "/home/archway/venv_musicgen/lib/python3.10/site-packages/anyio/_backends/_asyncio.py", line 2476, in run_sync_in_worker_thread
-    return await future
-  File "/home/archway/venv_musicgen/lib/python3.10/site-packages/anyio/_backends/_asyncio.py", line 967, in run
-    result = context.run(func, *args)
-  File "/home/archway/venv_musicgen/lib/python3.10/site-packages/gradio/utils.py", line 661, in wrapper
-    response = f(*args, **kwargs)
-  File "/home/archway/audiocraft/demos/musicgen_stems_continue2.py", line 870, in master_track
-    return _master_simple(audio_input, out_trim_db)
-  File "/home/archway/audiocraft/demos/musicgen_stems_continue2.py", line 786, in _master_simple
-    _apply_stereo_space(matched_path, widened_path)
-  File "/home/archway/audiocraft/demos/musicgen_stems_continue2.py", line 768, in _apply_stereo_space
-    sp.run(cmd, check=True)
-  File "/usr/lib/python3.10/subprocess.py", line 526, in run
-    raise CalledProcessError(retcode, process.args,
-subprocess.CalledProcessError: Command '['ffmpeg', '-y', '-i', '/home/archway/music/n-Track/mastered_simple_bf24488ab5c349d4836503e5caa26150.wav', '-af', 'stereotools=width=1.5:balance_out=0.0', '/home/archway/music/n-Track/mastered_simple_wide_131821d4f9e24186b5966418288fcb1e.wav']' returned non-zero exit status 1.
-
     final_name = f"{stem}_{uuid.uuid4().hex}.wav"
     final_path = TMP_DIR / final_name
     tmp_path   = TMP_DIR / f".{final_name}.tmp"
@@ -1073,4 +1019,5 @@ if __name__ == "__main__":
     warnings.filterwarnings("ignore", category=UserWarning)
     logging.basicConfig(level=logging.INFO)
     ui_full({"server_name": args.listen, "server_port": args.port})
+
 
