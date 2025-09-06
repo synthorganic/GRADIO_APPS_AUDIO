@@ -188,7 +188,7 @@ def _write_wav(wav_ct: torch.Tensor, sr: int, stem: str = "out", trim_db: float 
 To create a public link, set `share=True` in `launch()`.
 IMPORTANT: You are using gradio version 3.50.2, however version 4.44.1 is available, please upgrade.
 --------
-ffmpeg version 4.4.2-0ubuntu0.22.04.1 Copyright (c) 2000-2021 the FFmpeg developers
+ffmpeg version 4.4.2-0ubuntu0.22.04.1
   built with gcc 11 (Ubuntu 11.2.0-19ubuntu1)
   configuration: --prefix=/usr --extra-version=0ubuntu0.22.04.1 --toolchain=hardened --libdir=/usr/lib/x86_64-linux-gnu --incdir=/usr/include/x86_64-linux-gnu --arch=amd64 --enable-gpl --disable-stripping --enable-gnutls --enable-ladspa --enable-libaom --enable-libass --enable-libbluray --enable-libbs2b --enable-libcaca --enable-libcdio --enable-libcodec2 --enable-libdav1d --enable-libflite --enable-libfontconfig --enable-libfreetype --enable-libfribidi --enable-libgme --enable-libgsm --enable-libjack --enable-libmp3lame --enable-libmysofa --enable-libopenjpeg --enable-libopenmpt --enable-libopus --enable-libpulse --enable-librabbitmq --enable-librubberband --enable-libshine --enable-libsnappy --enable-libsoxr --enable-libspeex --enable-libsrt --enable-libssh --enable-libtheora --enable-libtwolame --enable-libvidstab --enable-libvorbis --enable-libvpx --enable-libwebp --enable-libx265 --enable-libxml2 --enable-libxvid --enable-libzimg --enable-libzmq --enable-libzvbi --enable-lv2 --enable-omx --enable-openal --enable-opencl --enable-opengl --enable-sdl2 --enable-pocketsphinx --enable-librsvg --enable-libmfx --enable-libdc1394 --enable-libdrm --enable-libiec61883 --enable-chromaprint --enable-frei0r --enable-libx264 --enable-shared
   libavutil      56. 70.100 / 56. 70.100
@@ -1073,3 +1073,4 @@ if __name__ == "__main__":
     warnings.filterwarnings("ignore", category=UserWarning)
     logging.basicConfig(level=logging.INFO)
     ui_full({"server_name": args.listen, "server_port": args.port})
+
