@@ -39,6 +39,13 @@ except ImportError:
     mg = None  # ensure symbol exists for type checkers and wrappers
     MATCHERING_AVAILABLE = False
 
+try:
+    sys.path.append(str(Path(__file__).resolve().parent / "versatile_audio_super_resolution"))
+    from audiosr import build_model as audiosr_build_model, super_resolution as audiosr_super_resolution
+    AUDIOSR_AVAILABLE = True
+except Exception:
+    AUDIOSR_AVAILABLE = False
+
 # ---------- Devices [ALTERED] ----------
 # High‑VRAM GPUs 0 & 1 host the heavy generation models.  Smaller GPUs 2 & 3
 # are reserved for diffusion/utility work so that section composer can always
@@ -81,6 +88,7 @@ STYLE_USE_DIFFUSION = False
 AUDIOGEN_MODEL = None
 MEDIUM_MODEL = None
 LARGE_MODEL = None
+AUDIOSR_MODEL = None
 
 # ---------- FFmpeg noise control (for future waveform use) [UNCHANGED] ----------
 _old_call = sp.call
@@ -553,7 +561,7 @@ def large_load_model():
     return LARGE_MODEL
 
 
-def style_predict(text, melody, duration=10, topk=250, topp=0.0, temperature=1.0,
+def style_predict(text, melody, duration=10, topk=200, topp=50.0, temperature=1.0,
                   cfg_coef=3.0, double_cfg="Yes", cfg_coef_beta=5.0,
                   eval_q=3, excerpt_length=3.0, decoder="Default",
                   out_trim_db=-3.0):
@@ -628,8 +636,8 @@ def audiogen_continuation(
     text_prompt: str = "",
     lookback_sec: float = 6.0,
     duration: int = 12,
-    topk: int = 250,
-    topp: float = 0.0,
+    topk: int = 200,
+    topp: float = 50.0,
     temperature: float = 1.0,
     cfg_coef: float = 3.0,
     crossfade_sec: float = 1.25,   # slightly shorter to avoid hot sums
@@ -840,8 +848,43 @@ def _master_simple(audio_input, reference_audio: str | None = None, out_trim_db:
     return str(widened_path)
 
 
+def audiosr_load_model():
+    """Load and cache the AudioSR model on the utility device."""
+    global AUDIOSR_MODEL
+    if AUDIOSR_MODEL is None:
+        if not AUDIOSR_AVAILABLE:
+            raise gr.Error("AudioSR not installed. Add the 'versatile_audio_super_resolution' directory.")
+        AUDIOSR_MODEL = audiosr_build_model(device=str(UTILITY_DEVICE))
+    return AUDIOSR_MODEL
+
+
+def _audiosr_process(audio_input):
+    """Upscale audio using AudioSR to 48kHz."""
+    if not AUDIOSR_AVAILABLE:
+        raise gr.Error("AudioSR not installed. Add the 'versatile_audio_super_resolution' directory.")
+    try:
+        sr, wav_np = audio_input
+    except Exception:
+        raise gr.Error("Please provide an audio clip.")
+    in_path = TMP_DIR / f"audiosr_in_{uuid.uuid4().hex}.wav"
+    audio_write(str(in_path), torch.from_numpy(wav_np).float().t(), sr, add_suffix=False)
+    model = audiosr_load_model()
+    out = audiosr_super_resolution(model, str(in_path))
+    if isinstance(out, torch.Tensor):
+        out = out.detach().cpu().numpy()
+    out_arr = out[0]
+    if out_arr.ndim == 1:
+        out_arr = out_arr[None, :]
+    out_path = TMP_DIR / f"audiosr_out_{uuid.uuid4().hex}.wav"
+    audio_write(str(out_path), torch.from_numpy(out_arr).float(), 48000, add_suffix=False)
+    return str(out_path)
+
+
 def master_track(audio_input, reference_audio: str | None, out_trim_db: float = -1.0,
-                 width: float = 1.5, pan: float = 0.0, bass_boost_db: float = 0.0):
+                 width: float = 1.5, pan: float = 0.0, bass_boost_db: float = 0.0,
+                 method: str = "Matchering"):
+    if method == "AudioSR":
+        return _audiosr_process(audio_input)
     return _master_simple(audio_input, reference_audio, out_trim_db, width, pan, bass_boost_db)
 
 # ============================================================================
@@ -882,8 +925,8 @@ def ui_full(launch_kwargs):
                 eval_q = gr.Slider(1, 6, value=3, step=1, label="Style RVQ")
                 excerpt = gr.Slider(0.5, 4.5, value=3.0, step=0.5, label="Excerpt length (s)")
             with gr.Row():
-                topk = gr.Number(label="Top-k", value=250)
-                topp = gr.Number(label="Top-p", value=0.0)
+                topk = gr.Number(label="Top-k", value=200)
+                topp = gr.Number(label="Top-p", value=50.0)
                 temp = gr.Number(label="Temperature", value=1.0)
                 cfg = gr.Number(label="CFG α", value=3.0)
                 double_cfg = gr.Radio(["Yes", "No"], value="Yes", label="Double CFG")
@@ -944,8 +987,8 @@ def ui_full(launch_kwargs):
             with gr.Row():
                 lookback = gr.Slider(0.5, 30.0, value=6.0, step=0.5, label="Lookback (s)")
                 cont_len = gr.Slider(1, 60, value=12, step=1, label="Continuation Length (s)")
-                ag_topk = gr.Number(label="Top-k", value=250)
-                ag_topp = gr.Number(label="Top-p", value=0.0)
+                ag_topk = gr.Number(label="Top-k", value=200)
+                ag_topp = gr.Number(label="Top-p", value=50.0)
                 ag_temp = gr.Number(label="Temperature", value=1.0)
                 ag_cfg = gr.Number(label="CFG α", value=3.0)
             out_trim_ag = gr.Slider(-24.0, 0.0, value=-3.0, step=0.5, label="Output Trim (dB)")
@@ -980,11 +1023,12 @@ def ui_full(launch_kwargs):
             width_master = gr.Slider(0.5, 3.0, value=1.5, step=0.1, label="Stereo Width")
             pan_master = gr.Slider(-1.0, 1.0, value=0.0, step=0.1, label="Stereo Pan")
             bass_master = gr.Slider(0.0, 12.0, value=0.0, step=0.5, label="Bass Boost (dB)")
+            master_method = gr.Radio(["Matchering", "AudioSR"], value="Matchering", label="Method")
             out_master = gr.Audio(label="Output", type="filepath")
             btn_master = gr.Button("Enqueue", variant="primary")
             btn_master.click(
                 master_track,
-                inputs=[audio_in3, ref_master, out_trim_master, width_master, pan_master, bass_master],
+                inputs=[audio_in3, ref_master, out_trim_master, width_master, pan_master, bass_master, master_method],
                 outputs=out_master,
                 queue=True,
             )
