@@ -29,6 +29,12 @@ try:
 except ImportError:
     DEMUCS_AVAILABLE = False
 
+try:
+    import matchering as mg
+    MATCHERING_AVAILABLE = True
+except ImportError:
+    MATCHERING_AVAILABLE = False
+
 # ---------- Devices [ALTERED] ----------
 STYLE_DEVICE = torch.device("cuda:1")       # Style pinned to GPU1
 AUDIOGEN_DEVICE = torch.device("cuda:0")    # AudioGen on GPU0
@@ -497,6 +503,108 @@ def separate_stems(audio_input):
     )
 
 # ============================================================================
+# MASTERING TAB UTILITIES [NEW]
+# ============================================================================
+
+def _ffmpeg_basic_cleanup(in_path: Path, out_path: Path) -> None:
+    """Apply basic corrective EQ via ffmpeg to mitigate common artefacts."""
+    hums = [50, 60, 100, 120, 150, 180]
+    filters = ["highpass=f=30", "highpass=f=40"]
+    filters += [f"anequalizer=f={h}:t=o:w=2:g=-25" for h in hums]
+    if 15600 < TARGET_SR / 2:
+        filters.append("anequalizer=f=15600:t=o:w=2:g=-25")
+    filters.append("lowpass=f=18000")
+    cmd = [
+        "ffmpeg",
+        "-y",
+        "-i",
+        str(in_path),
+        "-af",
+        ",".join(filters),
+        str(out_path),
+    ]
+    sp.run(cmd, check=True)
+
+
+def _apply_harmonic_exciter(in_path: Path, out_path: Path, freq: float) -> None:
+    """Light harmonic excitement using ffmpeg's aexciter filter."""
+    cmd = [
+        "ffmpeg",
+        "-y",
+        "-i",
+        str(in_path),
+        "-af",
+        f"aexciter=f={freq}",
+        str(out_path),
+    ]
+    sp.run(cmd, check=True)
+
+
+def _master_simple(audio_input, out_trim_db: float = -1.0):
+    if not MATCHERING_AVAILABLE:
+        raise gr.Error("Matchering not installed. `pip install matchering`")
+    try:
+        sr, wav_np = audio_input
+    except Exception:
+        raise gr.Error("Please provide an audio clip.")
+    in_path = TMP_DIR / f"master_in_{uuid.uuid4().hex}.wav"
+    audio_write(str(in_path), torch.from_numpy(wav_np).float().t(), sr, add_suffix=False)
+    ref = Path.home() / "references" / "reference.wav"
+    if not ref.exists():
+        raise gr.Error(f"Reference file missing: {ref}")
+    out_path = TMP_DIR / f"mastered_simple_{uuid.uuid4().hex}.wav"
+    mg.match(target=str(in_path), reference=str(ref), output=str(out_path))
+    return str(out_path)
+
+
+def _master_complex(audio_input, out_trim_db: float = -1.0):
+    if not MATCHERING_AVAILABLE:
+        raise gr.Error("Matchering not installed. `pip install matchering`")
+    if not DEMUCS_AVAILABLE:
+        raise gr.Error("Demucs not installed. `pip install demucs`")
+    stems = separate_stems(audio_input)
+    ref = Path.home() / "references" / "reference.wav"
+    if not ref.exists():
+        raise gr.Error(f"Reference file missing: {ref}")
+
+    cleaned = []
+    mastered = []
+    for stem_path in stems:
+        stem_p = Path(stem_path)
+        c_path = TMP_DIR / f"clean_{stem_p.stem}_{uuid.uuid4().hex}.wav"
+        _ffmpeg_basic_cleanup(stem_p, c_path)
+        m_path = TMP_DIR / f"master_{stem_p.stem}_{uuid.uuid4().hex}.wav"
+        mg.match(target=str(c_path), reference=str(ref), output=str(m_path))
+
+        # Harmonic excitement on vocals and other (synth) layers
+        if stem_p.stem in {"vocals", "other"}:
+            freq = 4000 if stem_p.stem == "vocals" else 8000
+            e_path = TMP_DIR / f"excite_{stem_p.stem}_{uuid.uuid4().hex}.wav"
+            _apply_harmonic_exciter(m_path, e_path, freq)
+            m_path = e_path
+
+        cleaned.append(c_path)
+        mastered.append(m_path)
+
+    mix_path = TMP_DIR / f"mastered_complex_{uuid.uuid4().hex}.wav"
+    cmd = ["ffmpeg", "-y"]
+    for m in mastered:
+        cmd.extend(["-i", str(m)])
+    cmd.extend([
+        "-filter_complex",
+        f"amix=inputs={len(mastered)}:normalize=0",
+        str(mix_path),
+    ])
+    sp.run(cmd, check=True)
+    return str(mix_path)
+
+
+def master_track(audio_input, pathway: str, out_trim_db: float = -1.0):
+    if pathway == "Simple":
+        return _master_simple(audio_input, out_trim_db)
+    return _master_complex(audio_input, out_trim_db)
+
+# ============================================================================
 # UI (three tabs, all Enqueue) [ALTERED]
 # ============================================================================
 def ui_full(launch_kwargs):
@@ -595,6 +703,15 @@ def ui_full(launch_kwargs):
                 btn_sep.click(separate_stems, inputs=audio_in2, outputs=[drums, vocals, bass, other], queue=True)
             else:
                 gr.Markdown("⚠️ Demucs not installed. `pip install demucs` to enable stems.")
+
+        # ----- MASTERING -----
+        with gr.Tab("Mastering"):
+            audio_in3 = gr.Audio(label="Input Track", type="numpy")
+            pathway = gr.Radio(["Simple", "Complex"], value="Simple", label="Pathway")
+            out_trim_master = gr.Slider(-24.0, 0.0, value=-1.0, step=0.5, label="Output Trim (dB)")
+            out_master = gr.Audio(label="Output", type="filepath")
+            btn_master = gr.Button("Enqueue", variant="primary")
+            btn_master.click(master_track, inputs=[audio_in3, pathway, out_trim_master], outputs=out_master, queue=True)
 
         # Global queue
         demo.queue(concurrency_count=1, max_size=32).launch(**launch_kwargs)
