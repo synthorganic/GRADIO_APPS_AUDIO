@@ -40,28 +40,32 @@ except ImportError:
     MATCHERING_AVAILABLE = False
 
 # ---------- Devices [ALTERED] ----------
-# Push section-composer workloads onto GPUs 2 & 3 so that heavy MusicGen
-# models can be swapped in and out without exhausting memory.  Style and
-# large models share GPU2 while the medium model lives on GPU3 when
-# available.  AudioGen remains on GPU1.
-STYLE_DEVICE = torch.device("cuda:2")        # Style model on GPU2
+# High‑VRAM GPUs 0 & 1 host the heavy generation models.  Smaller GPUs 2 & 3
+# are reserved for diffusion/utility work so that section composer can always
+# offload to MultiBandDiffusion without exhausting memory.
+STYLE_DEVICE = torch.device("cuda:0")        # Style + Large on GPU0
 MEDIUM_DEVICE = (
-    torch.device("cuda:3")
-    if torch.cuda.is_available() and torch.cuda.device_count() > 3
-    else torch.device("cuda:2")
+    torch.device("cuda:1")
+    if torch.cuda.is_available() and torch.cuda.device_count() > 1
+    else torch.device("cuda:0")
 )
-LARGE_DEVICE = STYLE_DEVICE                  # Large shares GPU2
-AUDIOGEN_DEVICE = torch.device("cuda:1")     # AudioGen on GPU1
+LARGE_DEVICE = STYLE_DEVICE                  # Large shares GPU0
+AUDIOGEN_DEVICE = MEDIUM_DEVICE              # AudioGen on GPU1
+DIFFUSION_DEVICE = (
+    torch.device("cuda:2")
+    if torch.cuda.is_available() and torch.cuda.device_count() > 2
+    else torch.device("cpu")
+)
 UTILITY_DEVICE = (
     torch.device("cuda:3")
     if torch.cuda.is_available() and torch.cuda.device_count() > 3
-    else torch.device("cpu")
+    else DIFFUSION_DEVICE
 )
 
 print(
     f"[Boot] STYLE: {STYLE_DEVICE} | MEDIUM: {MEDIUM_DEVICE} | "
     f"LARGE: {LARGE_DEVICE} | AUDIOGEN: {AUDIOGEN_DEVICE} | "
-    f"UTILITY(preproc/demucs): {UTILITY_DEVICE}"
+    f"DIFFUSION(MBD): {DIFFUSION_DEVICE} | UTILITY: {UTILITY_DEVICE}"
 )
 
 # ---------- Constants & paths [ALTERED] ----------
@@ -445,8 +449,8 @@ def compose_sections(
                 _offload_musicgen(MEDIUM_MODEL)
             _move_musicgen(model, device)
             if key == "style" and decoder == "MultiBand_Diffusion" and STYLE_MBD is not None:
-                _move_to_device(STYLE_MBD, device)
-                STYLE_MBD.device = device
+                _move_to_device(STYLE_MBD, DIFFUSION_DEVICE)
+                STYLE_MBD.device = DIFFUSION_DEVICE
             torch.cuda.set_device(device)
             active = key
         else:
@@ -460,6 +464,7 @@ def compose_sections(
             if decoder == "MultiBand_Diffusion" and STYLE_MBD is not None:
                 tokens = out[1] if isinstance(out, (tuple, list)) and len(out) > 1 else out[0]
                 tokens = tokens.to(STYLE_MBD.device)
+                torch.cuda.set_device(STYLE_MBD.device)
                 wav = STYLE_MBD.tokens_to_wav(tokens)[0]
             else:
                 wav = out[0]
@@ -569,8 +574,8 @@ def style_predict(text, melody, duration=10, topk=250, topp=0.0, temperature=1.0
         STYLE_USE_DIFFUSION = True
         style_load_diffusion()
         if STYLE_MBD is not None:
-            _move_to_device(STYLE_MBD, STYLE_DEVICE)
-            STYLE_MBD.device = STYLE_DEVICE
+            _move_to_device(STYLE_MBD, DIFFUSION_DEVICE)
+            STYLE_MBD.device = DIFFUSION_DEVICE
     else:
         STYLE_USE_DIFFUSION = False
 
@@ -597,6 +602,7 @@ def style_predict(text, melody, duration=10, topk=250, topp=0.0, temperature=1.0
         tokens = outputs[1]
         if tokens.device != STYLE_MBD.device:
             tokens = tokens.to(STYLE_MBD.device)
+        torch.cuda.set_device(STYLE_MBD.device)
         wavs = STYLE_MBD.tokens_to_wav(tokens)
         wav = wavs.detach().cpu().float()[0]  # (C,T)
         sr_out = TARGET_SR
