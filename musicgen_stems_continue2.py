@@ -370,6 +370,30 @@ def add_section(n):
     return [n] + updates
 
 
+def remove_section(n):
+    """Hide the last visible section row."""
+    n = int(n) - 1
+    n = max(1, n)
+    updates = [gr.update(visible=i < n) for i in range(MAX_SECTIONS)]
+    return [n] + updates
+
+
+def add_queue_item(queue, item):
+    """Append ``item`` to an in-memory queue list."""
+    queue = list(queue or [])
+    if item:
+        queue.append(item)
+    return queue, gr.update(choices=queue, value=None), ""
+
+
+def delete_queue_item(queue, selected):
+    """Remove ``selected`` item from the queue list."""
+    queue = list(queue or [])
+    if selected in queue:
+        queue.remove(selected)
+    return queue, gr.update(choices=queue, value=None)
+
+
 def compose_sections(
     sections: list[dict],
     init_audio,
@@ -391,6 +415,14 @@ def compose_sections(
     xf_sec = float(xf_beats) * 60.0 / max(1.0, float(bpm))
     xf_sec = max(0.8, min(1.2, xf_sec))
     assembled = None
+    if init_audio is not None:
+        try:
+            sr_in, data = init_audio
+            wav = torch.tensor(data).float().T
+            wav = convert_audio(wav, sr_in, sr, TARGET_AC)
+            assembled = wav
+        except Exception:
+            pass
     active = None
     for sec in sections:
         if sec["type"] in STYLE_SECTIONS:
@@ -892,11 +924,32 @@ def master_track(audio_input, pathway: str, out_trim_db: float = -1.0):
     return _master_complex(audio_input, out_trim_db)
 
 # ============================================================================
-# UI (three tabs, all Enqueue) [ALTERED]
+# UI (tabs, all Enqueue) [ALTERED]
 # ============================================================================
 def ui_full(launch_kwargs):
     with gr.Blocks() as demo:
         gr.Markdown("# 🎛️ Music Suite — Style • AudioGen Continuation • Stems  \n*Enqueue buttons; global queue enabled*")
+        queue_items = gr.State([])
+
+        # ----- QUEUE MANAGER -----
+        with gr.Tab("Queue"):
+            queue_display = gr.Dropdown(label="Queued Items", choices=[], interactive=True)
+            with gr.Row():
+                new_item = gr.Textbox(label="New Item")
+                btn_add_q = gr.Button("Add")
+                btn_del_q = gr.Button("Delete Selected")
+            btn_add_q.click(
+                add_queue_item,
+                inputs=[queue_items, new_item],
+                outputs=[queue_items, queue_display, new_item],
+                queue=False,
+            )
+            btn_del_q.click(
+                delete_queue_item,
+                inputs=[queue_items, queue_display],
+                outputs=[queue_items, queue_display],
+                queue=False,
+            )
 
         # ----- STYLE -----
         with gr.Tab("Style (MusicGen-Style, GPU2)"):
@@ -943,8 +996,11 @@ def ui_full(launch_kwargs):
                     sec_length = gr.Number(label="Length (s)", value=8)
                 section_rows.append(row)
                 section_inputs.extend([sec_type, sec_prompt, sec_length])
-            btn_add = gr.Button("Add Section")
+            with gr.Row():
+                btn_add = gr.Button("Add Section")
+                btn_del = gr.Button("Delete Section")
             btn_add.click(add_section, inputs=section_count, outputs=[section_count] + section_rows, queue=False)
+            btn_del.click(remove_section, inputs=section_count, outputs=[section_count] + section_rows, queue=False)
             with gr.Row():
                 bpm = gr.Slider(40, 240, value=120, step=1, label="Tempo (BPM)")
                 xf_beats = gr.Slider(0.0, 8.0, value=1.0, step=0.25, label="Crossfade (beats)")
