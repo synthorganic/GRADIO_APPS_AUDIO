@@ -702,7 +702,7 @@ def _apply_harmonic_exciter(in_path: Path, out_path: Path, freq: float) -> None:
         "-i",
         str(in_path),
         "-af",
-        f"aexciter=f={freq}",
+        f"aexciter=freq={freq}",
         str(out_path),
     ]
     sp.run(cmd, check=True)
@@ -754,15 +754,14 @@ def _matchering_match(target: str, reference: str, output: str) -> None:
 
 
 def _apply_stereo_space(in_path: Path, out_path: Path, width: float = 1.5, pan: float = 0.0) -> None:
-    """Use ffmpeg to widen stereo image and apply gentle panning."""
-     """Use ffmpeg to widen stereo image and apply gentle panning.
+    """Use ffmpeg to widen stereo image and apply gentle panning.
 
     ``stereotools`` uses ``slev`` to control stereo width; earlier versions of
     this script tried to pass a non-existent ``width`` option which caused
-    ffmpeg to fail.  Mapping ``width`` to ``slev`` keeps the caller API stable
+    ffmpeg to fail. Mapping ``width`` to ``slev`` keeps the caller API stable
     while using the correct ffmpeg parameter.
 
-    Some ffmpeg builds may lack support for ``slev`` altogether.  If the
+    Some ffmpeg builds may lack support for ``slev`` altogether. If the
     ``stereotools`` invocation fails we fall back to the simpler
     ``stereowiden`` filter as a best-effort approximation.
     """
@@ -775,7 +774,7 @@ def _apply_stereo_space(in_path: Path, out_path: Path, width: float = 1.5, pan: 
         f"stereotools=slev={width}:balance_out={pan}",
         str(out_path),
     ]
-     try:
+    try:
         sp.run(cmd, check=True)
     except sp.CalledProcessError:
         fallback = [
