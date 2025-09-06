@@ -16,6 +16,7 @@ from pathlib import Path
 import subprocess as sp
 
 import torch
+import torch.nn.functional as F
 import gradio as gr
 
 from audiocraft.data.audio_utils import convert_audio
@@ -57,6 +58,7 @@ STYLE_MODEL = None
 STYLE_MBD = None
 STYLE_USE_DIFFUSION = False
 AUDIOGEN_MODEL = None
+LARGE_MODEL = None
 
 # ---------- FFmpeg noise control (for future waveform use) [UNCHANGED] ----------
 _old_call = sp.call
@@ -297,6 +299,152 @@ def _audiogen_continue_compat(model, prompt: str, tail_32k_mono: torch.Tensor, s
 
     return None  # let caller emulate
 
+# ---------- MusicGen continuation + scoring helpers [NEW] ----------
+def _musicgen_continue_compat(model, prompt: str, tail_32k_mono: torch.Tensor, sr: int, return_tokens: bool = False):
+    """Attempt MusicGen continuation across versions."""
+    if not hasattr(model, "generate_continuation"):
+        return None
+    tail = tail_32k_mono.detach().to(model.device)
+    if tail.dim() == 2:
+        tail = tail.unsqueeze(0)
+    kwargs = {"audio_sample_rate": sr}
+    if return_tokens:
+        kwargs["return_tokens"] = True
+    variants = [
+        ("descriptions", "audio_wavs"),
+        ("descriptions", "audio"),
+        ("descriptions", "wavs"),
+        ("prompts", "audio"),
+        ("prompts", "audio_wavs"),
+    ]
+    for kd, ka in variants:
+        try:
+            kwargs[kd] = [prompt]
+            kwargs[ka] = tail
+            return model.generate_continuation(**kwargs)
+        except TypeError:
+            kwargs.pop(kd, None)
+            kwargs.pop(ka, None)
+    return None
+
+
+def _time_stretch_to_grid(wav: torch.Tensor, seconds: float, sr: int, bpm: float) -> torch.Tensor:
+    """If close to a beat grid, stretch by <2% to align."""
+    beat = 60.0 / max(1.0, float(bpm))
+    target = round(float(seconds) / beat) * beat
+    cur = wav.shape[-1] / sr
+    if target <= 0:
+        return wav
+    diff = abs(cur - target) / target
+    if diff <= 0.02:
+        new_len = int(target * sr)
+        wav = F.interpolate(wav.unsqueeze(0), size=new_len, mode="linear", align_corners=False).squeeze(0)
+    return wav
+
+
+def _score_candidate(wav: torch.Tensor, sr: int, bpm: float) -> float:
+    """Lightweight heuristic scoring for auto-selection."""
+    wav = wav.detach().cpu()
+    rms = _rms(wav)
+    peak = wav.abs().max().item()
+    crest = peak / (rms + 1e-9)
+    mix = max(0.0, 1.0 - abs(crest - 10.0) / 10.0)  # crest ~10 preferred
+    spec = torch.fft.rfft(wav, dim=-1)
+    freqs = torch.fft.rfftfreq(wav.shape[-1], 1.0 / sr)
+    edges = [0, 200, 400, 800, 1600, 3200, 6400, 12800, sr / 2]
+    bands = []
+    for lo, hi in zip(edges[:-1], edges[1:]):
+        mask = (freqs >= lo) & (freqs < hi)
+        if mask.any():
+            bands.append(spec[..., mask].abs().pow(2).mean())
+    balance = torch.stack(bands)
+    spectral = 1.0 - balance.std().item() / (balance.mean().item() + 1e-9)
+    tempo_score = 1.0  # placeholder
+    key_score = 1.0    # placeholder
+    prompt_score = 1.0 # placeholder
+    total = 0.3 * tempo_score + 0.2 * key_score + 0.2 * mix + 0.15 * spectral + 0.15 * prompt_score
+    return float(total)
+
+
+MAX_SECTIONS = 8
+STYLE_SECTIONS = {"Intro", "Bed", "Break", "Outro"}
+
+
+def add_section(n):
+    n = int(n) + 1
+    n = min(MAX_SECTIONS, n)
+    updates = [gr.update(visible=i < n) for i in range(MAX_SECTIONS)]
+    return [n] + updates
+
+
+def compose_sections(
+    sections: list[dict],
+    init_audio,
+    bpm: float = 120.0,
+    xf_beats: float = 1.0,
+    decoder: str = "Default",
+    out_trim_db: float = -3.0,
+    candidates: int = 2,
+):
+    """Compose sequential sections with model chaining."""
+    if not sections:
+        raise gr.Error("No sections provided.")
+    style_load_model()
+    large_load_model()
+    if decoder == "MultiBand_Diffusion":
+        style_load_diffusion()
+    sr = TARGET_SR
+    xf_sec = float(xf_beats) * 60.0 / max(1.0, float(bpm))
+    xf_sec = max(0.8, min(1.2, xf_sec))
+    prev = _prep_to_32k(init_audio, device=UTILITY_DEVICE) if init_audio else None
+    assembled = None
+    for sec in sections:
+        model = STYLE_MODEL if sec["type"] in STYLE_SECTIONS else LARGE_MODEL
+        model.set_generation_params(duration=int(sec["length"]))
+        best_wav = None
+        best_score = -1e9
+        for _ in range(int(candidates)):
+            if prev is not None:
+                out = _musicgen_continue_compat(model, sec["prompt"], prev, sr, return_tokens=(decoder == "MultiBand_Diffusion"))
+                if out is None:
+                    out = model.generate([sec["prompt"]], return_tokens=(decoder == "MultiBand_Diffusion"))
+            else:
+                out = model.generate([sec["prompt"]], return_tokens=(decoder == "MultiBand_Diffusion"))
+            if decoder == "MultiBand_Diffusion" and STYLE_MBD is not None:
+                tokens = out[1] if isinstance(out, (tuple, list)) and len(out) > 1 else out[0]
+                tokens = tokens.to(STYLE_MBD.device)
+                wav = STYLE_MBD.tokens_to_wav(tokens)[0]
+            else:
+                wav = out[0]
+            wav = wav.detach().cpu().float()
+            score = _score_candidate(wav, sr, bpm)
+            if score > best_score:
+                best_score = score
+                best_wav = wav
+        if best_wav is None:
+            raise gr.Error("Section generation failed.")
+        best_wav = _time_stretch_to_grid(best_wav, sec["length"], sr, bpm)
+        assembled = best_wav if assembled is None else _crossfade_concat(assembled, best_wav, sr, xf_sec=xf_sec)
+        prev = best_wav.unsqueeze(0)
+    return _write_wav(assembled, sr, stem="sections", trim_db=float(out_trim_db))
+
+
+def compose_sections_ui(init_audio, count, *vals):
+    bpm = vals[-4]
+    xf_beats = vals[-3]
+    decoder = vals[-2]
+    out_trim_db = vals[-1]
+    vals = vals[:-4]
+    sections = []
+    count = int(count)
+    for i in range(count):
+        typ = vals[3 * i]
+        prompt = vals[3 * i + 1]
+        length = vals[3 * i + 2]
+        if prompt and length:
+            sections.append({"type": typ, "prompt": prompt, "length": float(length)})
+    return compose_sections(sections, init_audio, bpm, xf_beats, decoder, out_trim_db)
+
 # ============================================================================
 # STYLE TAB (MusicGen-Style) [UNCHANGED intent; better writer]
 # ============================================================================
@@ -319,6 +467,16 @@ def style_load_diffusion():
         _move_to_device(STYLE_MBD, STYLE_DEVICE)
         # track device manually for downstream checks
         STYLE_MBD.device = STYLE_DEVICE
+
+
+def large_load_model():
+    """Lazy-load facebook/musicgen-large on STYLE_DEVICE."""
+    global LARGE_MODEL
+    if LARGE_MODEL is None:
+        print(f"[Large] Loading facebook/musicgen-large on {STYLE_DEVICE}")
+        LARGE_MODEL = MusicGen.get_pretrained("facebook/musicgen-large")
+        LARGE_MODEL.device = STYLE_DEVICE
+    return LARGE_MODEL
 
 
 def style_predict(text, melody, duration=10, topk=250, topp=0.0, temperature=1.0,
@@ -374,34 +532,6 @@ def style_predict(text, melody, duration=10, topk=250, topp=0.0, temperature=1.0
         sr_out = STYLE_MODEL.sample_rate
 
     return _write_wav(wav, sr_out, stem="style", trim_db=float(out_trim_db))
-
-# ============================================================================
-# SECTION COMPOSER TAB [NEW]
-# ============================================================================
-def compose_sections(structure: str, prompts: str, lengths: str,
-                     bpm: float = 120.0, xf_beats: float = 1.0,
-                     out_trim_db: float = -3.0):
-    """Compose multiple sections with equal-power crossfades."""
-    sections = [s.strip() for s in structure.split(',') if s.strip()]
-    prompt_list = [p.strip() for p in prompts.split('|') if p.strip()]
-    length_list = [float(x.strip()) for x in lengths.split(',') if x.strip()]
-    if not (len(sections) == len(prompt_list) == len(length_list)):
-        raise gr.Error("Structure, prompts and lengths counts must match.")
-
-    style_load_model()
-    sr = STYLE_MODEL.sample_rate
-    xf_sec = float(xf_beats) * 60.0 / max(1.0, float(bpm))
-    assembled = None
-    for prompt, dur in zip(prompt_list, length_list):
-        STYLE_MODEL.set_generation_params(duration=int(dur))
-        seg = STYLE_MODEL.generate([prompt])[0].detach().cpu().float()
-        if seg.dim() == 1:
-            seg = seg.unsqueeze(0)
-        assembled = seg if assembled is None else _crossfade_concat(assembled, seg, sr, xf_sec=xf_sec)
-
-    if assembled is None:
-        raise gr.Error("No valid sections were generated.")
-    return _write_wav(assembled, sr, stem="sections", trim_db=float(out_trim_db))
 
 # ============================================================================
 # AUDIOGEN CONTINUATION TAB [ALTERED]
@@ -677,29 +807,33 @@ def ui_full(launch_kwargs):
 
         # ----- SECTION COMPOSER -----
         with gr.Tab("Section Composer"):
-            with gr.Row():
-                structure = gr.Textbox(
-                    label="Structure",
-                    value="Intro,A,B,Break,Drop,Outro",
-                    placeholder="Comma-separated sections"
-                )
-                sec_prompts = gr.Textbox(
-                    label="Prompts (| separated)",
-                    placeholder="Intro vibe|A section|B section|Break|Drop|Outro"
-                )
-                sec_lengths = gr.Textbox(
-                    label="Lengths (s, comma-separated)",
-                    value="4,8,8,4,8,8"
-                )
+            init_audio = gr.Audio(label="Initial Audio (optional)", type="numpy")
+            section_count = gr.State(1)
+            section_rows = []
+            section_inputs = []
+            for i in range(MAX_SECTIONS):
+                with gr.Row(visible=(i == 0)) as row:
+                    sec_type = gr.Dropdown(
+                        ["Intro", "Build", "Break", "Drop", "Bridge", "Bed", "Outro"],
+                        value="Intro",
+                        label=f"Section {i+1}",
+                    )
+                    sec_prompt = gr.Textbox(label="Prompt")
+                    sec_length = gr.Number(label="Length (s)", value=8)
+                section_rows.append(row)
+                section_inputs.extend([sec_type, sec_prompt, sec_length])
+            btn_add = gr.Button("Add Section")
+            btn_add.click(add_section, inputs=section_count, outputs=[section_count] + section_rows, queue=False)
             with gr.Row():
                 bpm = gr.Slider(40, 240, value=120, step=1, label="Tempo (BPM)")
                 xf_beats = gr.Slider(0.0, 8.0, value=1.0, step=0.25, label="Crossfade (beats)")
+            decoder = gr.Radio(["Default", "MultiBand_Diffusion"], value="Default", label="Decoder")
             out_trim_sections = gr.Slider(-24.0, 0.0, value=-3.0, step=0.5, label="Output Trim (dB)")
             out_sections = gr.Audio(label="Output", type="filepath")
             btn_sections = gr.Button("Enqueue", variant="primary")
             btn_sections.click(
-                compose_sections,
-                inputs=[structure, sec_prompts, sec_lengths, bpm, xf_beats, out_trim_sections],
+                compose_sections_ui,
+                inputs=[init_audio, section_count] + section_inputs + [bpm, xf_beats, decoder, out_trim_sections],
                 outputs=out_sections,
                 queue=True,
             )
