@@ -59,6 +59,7 @@ STYLE_MBD = None
 STYLE_USE_DIFFUSION = False
 AUDIOGEN_MODEL = None
 MEDIUM_MODEL = None
+LARGE_MODEL = None
 
 # ---------- FFmpeg noise control (for future waveform use) [UNCHANGED] ----------
 _old_call = sp.call
@@ -391,6 +392,8 @@ def compose_sections(
         raise gr.Error("No sections provided.")
     style_load_model()
     medium_load_model()
+    large_load_model()
+ main
     if decoder == "MultiBand_Diffusion":
         style_load_diffusion()
     sr = TARGET_SR
@@ -399,7 +402,10 @@ def compose_sections(
     prev = _prep_to_32k(init_audio, device=UTILITY_DEVICE) if init_audio else None
     assembled = None
     for sec in sections:
+ codex/implement-multi-model-composer-structure-q0tn0k
         model = STYLE_MODEL if sec["type"] in STYLE_SECTIONS else MEDIUM_MODEL
+        model = STYLE_MODEL if sec["type"] in STYLE_SECTIONS else LARGE_MODEL
+        main
         model.set_generation_params(duration=int(sec["length"]))
         best_wav = None
         best_score = -1e9
@@ -477,6 +483,14 @@ def medium_load_model():
         MEDIUM_MODEL = MusicGen.get_pretrained("facebook/musicgen-medium")
         MEDIUM_MODEL.device = STYLE_DEVICE
     return MEDIUM_MODEL
+def large_load_model():
+    """Lazy-load facebook/musicgen-large on STYLE_DEVICE."""
+    global LARGE_MODEL
+    if LARGE_MODEL is None:
+        print(f"[Large] Loading facebook/musicgen-large on {STYLE_DEVICE}")
+        LARGE_MODEL = MusicGen.get_pretrained("facebook/musicgen-large")
+        LARGE_MODEL.device = STYLE_DEVICE
+    return LARGE_MODEL
 
 
 def style_predict(text, melody, duration=10, topk=250, topp=0.0, temperature=1.0,
