@@ -817,8 +817,134 @@ def _apply_bass_boost(in_path: Path, out_path: Path, sr: int, gain_db: float) ->
     sp.run(cmd, check=True)
 
 
-def _master_simple(audio_input, reference_audio: str | None = None, out_trim_db: float = -1.0,
-                   width: float = 1.5, pan: float = 0.0, bass_boost_db: float = 0.0):
+# Bands that can be attenuated/boosted via the frequency cut UI. Each tuple is
+# (label, low_hz, high_hz, description).
+FREQ_BANDS = [
+    (
+        "Infrasound",
+        1,
+        20,
+        "Anxiety, nausea, chest pressure, hallucinations; vibrates organs/eyeballs",
+    ),
+    (
+        "Eyeball resonance",
+        16,
+        18,
+        "Visual disturbance, discomfort; matches eyeball natural frequency",
+    ),
+    (
+        "Sub-rumble conflict",
+        30,
+        80,
+        "Muddy, boomy, disorienting; overlaps room modes and sub-harmonics",
+    ),
+    (
+        "Beating tones",
+        0,
+        10,
+        "Pulsing, wobble, unsteady feeling; interference between close frequencies",
+    ),
+    (
+        "Roughness region",
+        15,
+        30,
+        "Metallic, buzzy, stressful; fast beating equals tension",
+    ),
+    (
+        "Dissonant intervals",
+        600,
+        800,
+        "Tension, unresolved, horror vibes; unstable harmonic ratios",
+    ),
+    (
+        "Midrange overload",
+        250,
+        800,
+        "Muddiness, fatigue, crowding; conflicts with human vocal range",
+    ),
+    (
+        "Harsh upper mids",
+        2500,
+        4500,
+        "Shrillness, ear pain, baby-cry level alert; peak auditory sensitivity",
+    ),
+    (
+        "Digital aliasing artifacts",
+        10000,
+        20000,
+        "Grainy, robotic, unnatural; math artifacts from poor sampling",
+    ),
+]
+
+
+def _apply_bass_narrow(in_path: Path, out_path: Path, sr: int, width: float) -> None:
+    """Reduce stereo width of low frequencies via ffmpeg."""
+    if width >= 0.999:
+        shutil.copyfile(in_path, out_path)
+        return
+    w = max(0.0, min(1.0, width))
+    pan_expr = (
+        f"c0=c0*{w}+0.5*(1-{w})*(c0+c1)|"
+        f"c1=c1*{w}+0.5*(1-{w})*(c0+c1)"
+    )
+    filter_expr = (
+        f"asplit=2[low][high];"
+        f"[low]lowpass=f=150,pan=stereo|{pan_expr}[l];"
+        f"[high]highpass=f=150[h];"
+        f"[l][h]amix=inputs=2:dropout_transition=0"
+    )
+    cmd = [
+        "ffmpeg",
+        "-y",
+        "-i",
+        str(in_path),
+        "-af",
+        filter_expr,
+        "-ar",
+        str(sr),
+        str(out_path),
+    ]
+    sp.run(cmd, check=True)
+
+
+def _apply_frequency_cuts(
+    in_path: Path, out_path: Path, sr: int, gains: list[float]
+) -> None:
+    """Apply per-band gain adjustments using ffmpeg's equalizer filter."""
+    filters = []
+    for gain_db, (label, low, high, _desc) in zip(gains, FREQ_BANDS):
+        if abs(gain_db) < 1e-6:
+            continue
+        center = (low + high) / 2.0
+        width = max(high - low, 1)
+        filters.append(f"equalizer=f={center}:t=h:w={width}:g={gain_db}")
+    if not filters:
+        shutil.copyfile(in_path, out_path)
+        return
+    cmd = [
+        "ffmpeg",
+        "-y",
+        "-i",
+        str(in_path),
+        "-af",
+        ",".join(filters),
+        "-ar",
+        str(sr),
+        str(out_path),
+    ]
+    sp.run(cmd, check=True)
+
+
+def _master_simple(
+    audio_input,
+    reference_audio: str | None = None,
+    out_trim_db: float = -1.0,
+    width: float = 1.5,
+    pan: float = 0.0,
+    bass_boost_db: float = 0.0,
+    bass_width: float = 0.0,
+    freq_gains: list[float] | None = None,
+):
     if not MATCHERING_AVAILABLE:
         raise gr.Error("Matchering not installed. `pip install matchering`")
     try:
@@ -839,7 +965,16 @@ def _master_simple(audio_input, reference_audio: str | None = None, out_trim_db:
     _apply_bass_boost(matched_path, bass_path, sr, bass_boost_db)
     widened_path = TMP_DIR / f"mastered_simple_wide_{uuid.uuid4().hex}.wav"
     _apply_stereo_space(bass_path, widened_path, sr, width=width, pan=pan)
-    return str(widened_path)
+    narrowed_path = TMP_DIR / f"mastered_simple_narrow_{uuid.uuid4().hex}.wav"
+    _apply_bass_narrow(widened_path, narrowed_path, sr, bass_width)
+    final_path = TMP_DIR / f"mastered_simple_final_{uuid.uuid4().hex}.wav"
+    _apply_frequency_cuts(
+        narrowed_path,
+        final_path,
+        sr,
+        freq_gains or [0.0] * len(FREQ_BANDS),
+    )
+    return str(final_path)
 
 
 def audiosr_load_model():
@@ -874,12 +1009,48 @@ def _audiosr_process(audio_input):
     return str(out_path)
 
 
-def master_track(audio_input, reference_audio: str | None, out_trim_db: float = -1.0,
-                 width: float = 1.5, pan: float = 0.0, bass_boost_db: float = 0.0,
-                 method: str = "Matchering"):
+def master_track(
+    audio_input,
+    reference_audio: str | None,
+    out_trim_db: float = -1.0,
+    width: float = 1.5,
+    pan: float = 0.0,
+    bass_boost_db: float = 0.0,
+    bass_width: float = 0.0,
+    infrasound_db: float = 0.0,
+    eyeball_db: float = 0.0,
+    sub_rumble_db: float = 0.0,
+    beating_db: float = 0.0,
+    roughness_db: float = 0.0,
+    dissonant_db: float = 0.0,
+    midrange_db: float = 0.0,
+    harsh_db: float = 0.0,
+    alias_db: float = 0.0,
+    method: str = "Matchering",
+):
     if method == "AudioSR":
         return _audiosr_process(audio_input)
-    return _master_simple(audio_input, reference_audio, out_trim_db, width, pan, bass_boost_db)
+    gains = [
+        infrasound_db,
+        eyeball_db,
+        sub_rumble_db,
+        beating_db,
+        roughness_db,
+        dissonant_db,
+        midrange_db,
+        harsh_db,
+        alias_db,
+    ]
+    return _master_simple(
+        audio_input,
+        reference_audio,
+        out_trim_db,
+        width,
+        pan,
+        bass_boost_db,
+        bass_width,
+        gains,
+    )
 
 # ============================================================================
 # UI (tabs, all Enqueue) [ALTERED]
@@ -1017,12 +1188,37 @@ def ui_full(launch_kwargs):
             width_master = gr.Slider(0.5, 3.0, value=1.5, step=0.1, label="Stereo Width")
             pan_master = gr.Slider(-1.0, 1.0, value=0.0, step=0.1, label="Stereo Pan")
             bass_master = gr.Slider(0.0, 12.0, value=0.0, step=0.5, label="Bass Boost (dB)")
+            bass_width = gr.Slider(0.0, 1.0, value=0.0, step=0.1, label="Bass Width", info="0=mono")
+            freq_sliders = []
+            with gr.Accordion("Frequency Cuts", open=False):
+                for label, low, high, desc in FREQ_BANDS:
+                    rng = f"{low}-{high} Hz" if low != high else f"{low} Hz"
+                    freq_sliders.append(
+                        gr.Slider(
+                            -12.0,
+                            12.0,
+                            value=0.0,
+                            step=0.5,
+                            label=f"{label} ({rng})",
+                            info=desc,
+                        )
+                    )
             master_method = gr.Radio(["Matchering", "AudioSR"], value="Matchering", label="Method")
             out_master = gr.Audio(label="Output", type="filepath")
             btn_master = gr.Button("Enqueue", variant="primary")
             btn_master.click(
                 master_track,
-                inputs=[audio_in3, ref_master, out_trim_master, width_master, pan_master, bass_master, master_method],
+                inputs=[
+                    audio_in3,
+                    ref_master,
+                    out_trim_master,
+                    width_master,
+                    pan_master,
+                    bass_master,
+                    bass_width,
+                    *freq_sliders,
+                    master_method,
+                ],
                 outputs=out_master,
                 queue=True,
             )
