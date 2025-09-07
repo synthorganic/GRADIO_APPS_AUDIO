@@ -19,8 +19,6 @@ except Exception:  # pragma: no cover - minimal torch stub
             return self
 
     nn_stub = types.ModuleType("torch.nn")
-    nn_stub.Module = object
-    nn_stub.Parameter = lambda *a, **k: None
     nn_stub.functional = types.ModuleType("torch.nn.functional")
     torch = types.SimpleNamespace(
         Tensor=object,

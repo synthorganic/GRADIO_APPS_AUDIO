@@ -894,6 +894,9 @@ def _apply_bass_narrow(in_path: Path, out_path: Path, sr: int, width: float) -> 
     pan_expr = (
         f"c0=c0*{w:.6f}+{mono_mix:.6f}*(c0+c1)|"
         f"c1=c1*{w:.6f}+{mono_mix:.6f}*(c0+c1)"
+    pan_expr = (
+        f"c0=c0*{w}+0.5*(1-{w})*(c0+c1)|"
+        f"c1=c1*{w}+0.5*(1-{w})*(c0+c1)"
     )
     filter_expr = (
         f"asplit=2[low][high];"
