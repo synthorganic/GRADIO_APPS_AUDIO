@@ -10,6 +10,7 @@ import argparse
 import logging
 import math
 import os
+import base64
 import warnings
 import uuid
 from pathlib import Path
@@ -174,6 +175,19 @@ TMP_DIR.mkdir(parents=True, exist_ok=True)
 # the temporary directory so that they survive application restarts.
 SETTINGS_PATH = TMP_DIR / "settings.json"
 
+
+# Local font embedding for offline usage. Warn if the file is missing so that
+# missing or unreadable fonts surface during startup instead of failing
+# silently when building the CSS.
+FONT_PATH = Path(__file__).resolve().parent / "assets" / "nasalization.ttf"
+FONT_BASE64 = ""
+if FONT_PATH.exists():
+    try:
+        FONT_BASE64 = base64.b64encode(FONT_PATH.read_bytes()).decode("utf-8")
+    except Exception as exc:  # pragma: no cover - log unexpected issues
+        logging.warning("Could not read font file %s: %s", FONT_PATH, exc)
+else:  # pragma: no cover - font file missing
+    logging.warning("Font file not found: %s", FONT_PATH)
 
 # Global font / theme overrides
 CUSTOM_CSS = """
