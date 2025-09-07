@@ -91,7 +91,7 @@ def test_apply_bass_narrow_builds_filter(monkeypatch, tmp_path):
     af_arg = cmds[0][cmds[0].index("-af") + 1]
     assert "lowpass" in af_arg
     assert "(1-" not in af_arg
-    assert "c0=0.5*(c0+c1)|c1=0.5*(c0+c1)" in af_arg
+    assert "c0=0.5*c0+0.5*c1|c1=0.5*c0+0.5*c1" in af_arg
 
 
 def test_apply_frequency_cuts_uses_equalizer(monkeypatch, tmp_path):

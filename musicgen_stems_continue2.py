@@ -900,12 +900,13 @@ def _apply_bass_narrow(in_path: Path, out_path: Path, sr: int, width: float) -> 
         return
     w = max(0.0, min(1.0, width))
     if w <= 1e-6:
-        pan_expr = "c0=0.5*(c0+c1)|c1=0.5*(c0+c1)"
+        pan_expr = "c0=0.5*c0+0.5*c1|c1=0.5*c0+0.5*c1"
     else:
         mono_mix = 0.5 * (1.0 - w)
+        base = w + mono_mix
         pan_expr = (
-            f"c0=c0*{w:.6f}+{mono_mix:.6f}*(c0+c1)|"
-            f"c1=c1*{w:.6f}+{mono_mix:.6f}*(c0+c1)"
+            f"c0={base:.6f}*c0+{mono_mix:.6f}*c1|"
+            f"c1={base:.6f}*c1+{mono_mix:.6f}*c0"
         )
     filter_expr = (
         f"asplit=2[low][high];"
