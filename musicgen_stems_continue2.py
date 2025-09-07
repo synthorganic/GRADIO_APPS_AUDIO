@@ -106,6 +106,13 @@ try:  # matplotlib for waveform visualization
 except Exception:  # pragma: no cover - optional runtime dep
     MATPLOTLIB_AVAILABLE = False
 
+try:  # Retrieval-based Voice Conversion (RVC) library
+    from rvc import VoiceConverter  # type: ignore
+    RVC_AVAILABLE = True
+except Exception:  # pragma: no cover - optional runtime dep
+    VoiceConverter = None  # type: ignore
+    RVC_AVAILABLE = False
+
 # ---------- Devices [ALTERED] ----------
 # Allow overriding the default GPU placement via environment variables.  Each
 # variable should be a string understood by ``torch.device`` such as
@@ -1543,6 +1550,60 @@ def _matchering_match(target: str, reference: str, output: str) -> None:
         except (FileNotFoundError, sp.CalledProcessError):
             continue
     raise gr.Error("Matchering CLI invocation failed; ensure it is installed")
+
+
+def rvc_convert_vocals(
+    vocal_path: Path,
+    model_path: Path,
+    output_path: Path,
+    pitch_shift: float = 0.0,
+    index_ratio: float = 0.5,
+    filter_radius: int = 3,
+    algorithm: str = "harvest",
+) -> Path:
+    """Convert a vocal track to a target timbre using an RVC model.
+
+    Parameters
+    ----------
+    vocal_path:
+        Path to the isolated vocal audio to convert. High-quality, clean vocals
+        yield the best results; tools like UVR can help isolate vocals.
+    model_path:
+        Location of the pretrained RVC model weights.
+    output_path:
+        Destination where the converted audio will be written.
+    pitch_shift:
+        Semitone adjustment applied before conversion to better match the
+        target voice.
+    index_ratio:
+        Blend ratio between the model's learned characteristics and the source
+        signal. Values between 0.3 and 0.8 usually provide a natural balance.
+    filter_radius:
+        Smoothing radius used by the converter. Higher values preserve more of
+        the original vocal; a range of 3–7 is generally effective.
+    algorithm:
+        Pitch extraction algorithm. ``"harvest"`` often yields the most
+        natural-sounding results.
+
+    Notes
+    -----
+    Match the source audio's EQ and compression to the training data when
+    possible, and apply subtle reverb/EQ/compression after conversion to blend
+    with the instrumental.
+    """
+    if not RVC_AVAILABLE:
+        raise RuntimeError("RVC library is not available")
+
+    converter = VoiceConverter(model_path)
+    converter.convert(
+        str(vocal_path),
+        str(output_path),
+        pitch_shift=pitch_shift,
+        index_ratio=index_ratio,
+        filter_radius=filter_radius,
+        algorithm=algorithm,
+    )
+    return output_path
 
 
 def _apply_stereo_space(in_path: Path, out_path: Path, sr: int, width: float = 1.5, pan: float = 0.0) -> None:
