@@ -17,6 +17,7 @@ except Exception:  # pragma: no cover - minimal torch stub
 
         def t(self):
             return self
+
     nn_stub = types.ModuleType("torch.nn")
     nn_stub.functional = types.ModuleType("torch.nn.functional")
     torch = types.SimpleNamespace(
@@ -87,7 +88,10 @@ def test_apply_bass_narrow_builds_filter(monkeypatch, tmp_path):
     inp.touch()
     outp = tmp_path / "out.wav"
     msc2._apply_bass_narrow(inp, outp, sr=32000, width=0.0)
-    assert "lowpass" in cmds[0][cmds[0].index("-af") + 1]
+    af_arg = cmds[0][cmds[0].index("-af") + 1]
+    assert "lowpass" in af_arg
+    assert "(1-" not in af_arg
+    assert "c0=c0*0.000000+0.500000*(c0+c1)" in af_arg
 
 
 def test_apply_frequency_cuts_uses_equalizer(monkeypatch, tmp_path):
@@ -122,3 +126,18 @@ def test_master_simple_uses_default_reference(monkeypatch, tmp_path):
     wav = np.zeros((sr,), dtype=np.float32)
     out = msc2._master_simple((sr, wav))
     assert Path(out).exists()
+
+
+def test_audiosr_loads_on_configured_device(monkeypatch):
+    called = {}
+
+    def fake_build_model(device):  # captures device string
+        called["device"] = device
+        return object()
+
+    monkeypatch.setattr(msc2, "AUDIOSR_AVAILABLE", True)
+    monkeypatch.setattr(msc2, "audiosr_build_model", fake_build_model, raising=False)
+    msc2.AUDIOSR_MODEL = None
+
+    msc2.audiosr_load_model()
+    assert called["device"] == str(msc2.AUDIOSR_DEVICE)

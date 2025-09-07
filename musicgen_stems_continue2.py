@@ -68,11 +68,17 @@ UTILITY_DEVICE = (
     if torch.cuda.is_available() and torch.cuda.device_count() > 3
     else DIFFUSION_DEVICE
 )
+AUDIOSR_DEVICE = (
+    torch.device("cuda:1")
+    if torch.cuda.is_available() and torch.cuda.device_count() > 1
+    else UTILITY_DEVICE
+)
 
 print(
     f"[Boot] STYLE: {STYLE_DEVICE} | MEDIUM: {MEDIUM_DEVICE} | "
     f"LARGE: {LARGE_DEVICE} | AUDIOGEN: {AUDIOGEN_DEVICE} | "
-    f"DIFFUSION(MBD): {DIFFUSION_DEVICE} | UTILITY: {UTILITY_DEVICE}"
+    f"DIFFUSION(MBD): {DIFFUSION_DEVICE} | UTILITY: {UTILITY_DEVICE} | "
+    f"AUDIOSR: {AUDIOSR_DEVICE}"
 )
 
 # ---------- Constants & paths [ALTERED] ----------
@@ -776,7 +782,7 @@ def _apply_stereo_space(in_path: Path, out_path: Path, sr: int, width: float = 1
         "-i",
         str(in_path),
         "-af",
-        f"stereotools=slev={width_s}:balance_out={pan_s}",
+        f"stereotools=slev={width_s:.6f}:balance_out={pan_s:.6f}",
         "-ar",
         str(sr),
         str(out_path),
@@ -784,13 +790,14 @@ def _apply_stereo_space(in_path: Path, out_path: Path, sr: int, width: float = 1
     try:
         sp.run(cmd, check=True)
     except sp.CalledProcessError:
+        crossfeed = max(0.0, width_s - 1.0)
         fallback = [
             "ffmpeg",
             "-y",
             "-i",
             str(in_path),
             "-af",
-            f"stereowiden=delay=20:feedback=0.3:crossfeed={max(0.0, width_s - 1.0)}:drymix=0.8",
+            f"stereowiden=delay=20:feedback=0.3:crossfeed={crossfeed:.6f}:drymix=0.8",
             "-ar",
             str(sr),
             str(out_path),
@@ -883,6 +890,10 @@ def _apply_bass_narrow(in_path: Path, out_path: Path, sr: int, width: float) -> 
         shutil.copyfile(in_path, out_path)
         return
     w = max(0.0, min(1.0, width))
+    mono_mix = 0.5 * (1.0 - w)
+    pan_expr = (
+        f"c0=c0*{w:.6f}+{mono_mix:.6f}*(c0+c1)|"
+        f"c1=c1*{w:.6f}+{mono_mix:.6f}*(c0+c1)"
     pan_expr = (
         f"c0=c0*{w}+0.5*(1-{w})*(c0+c1)|"
         f"c1=c1*{w}+0.5*(1-{w})*(c0+c1)"
@@ -978,12 +989,12 @@ def _master_simple(
 
 
 def audiosr_load_model():
-    """Load and cache the AudioSR model on the utility device."""
+    """Load and cache the AudioSR model on the dedicated AudioSR device."""
     global AUDIOSR_MODEL
     if AUDIOSR_MODEL is None:
         if not AUDIOSR_AVAILABLE:
             raise gr.Error("AudioSR not installed. Add the 'versatile_audio_super_resolution' directory.")
-        AUDIOSR_MODEL = audiosr_build_model(device=str(UTILITY_DEVICE))
+        AUDIOSR_MODEL = audiosr_build_model(device=str(AUDIOSR_DEVICE))
     return AUDIOSR_MODEL
 
 
