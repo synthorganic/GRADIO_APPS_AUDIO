@@ -16,6 +16,7 @@ from pathlib import Path
 import subprocess as sp
 import sys
 import shutil
+import json
 import numpy as np
 import types
 
@@ -35,9 +36,19 @@ try:
 except Exception:  # pragma: no cover - allow import without gradio
     gr = types.SimpleNamespace(Error=Exception)
 
-from audiocraft.data.audio_utils import convert_audio
-from audiocraft.data.audio import audio_write
-from audiocraft.models import MusicGen, MultiBandDiffusion, AudioGen
+# ``audiocraft`` is a heavy optional dependency.  Importing this module should
+# not fail if it is missing, so we provide minimal placeholders when the
+# package cannot be imported.  Only a very small subset of the file is used by
+# the tests and the rest of the application will gracefully error if the real
+# implementation is required at runtime.
+try:  # pragma: no cover - optional runtime dependency
+    from audiocraft.data.audio_utils import convert_audio
+    from audiocraft.data.audio import audio_write
+    from audiocraft.models import MusicGen, MultiBandDiffusion, AudioGen
+    AUDIOCRAFT_AVAILABLE = True
+except Exception:  # pragma: no cover - allow import without audiocraft
+    convert_audio = audio_write = MusicGen = MultiBandDiffusion = AudioGen = None
+    AUDIOCRAFT_AVAILABLE = False
 
 # ---------- Optional deps [UNCHANGED] ----------
 try:
@@ -88,38 +99,54 @@ try:  # MIDI export for harmonization
     MIDO_AVAILABLE = True
 except Exception:  # pragma: no cover - optional runtime dep
     MIDO_AVAILABLE = False
+ 
+try:  # matplotlib for waveform visualization
+    import matplotlib.pyplot as plt  # type: ignore
+    MATPLOTLIB_AVAILABLE = True
+except Exception:  # pragma: no cover - optional runtime dep
+    MATPLOTLIB_AVAILABLE = False
 
 # ---------- Devices [ALTERED] ----------
+# Allow overriding the default GPU placement via environment variables.  Each
+# variable should be a string understood by ``torch.device`` such as
+# ``"cuda:1"`` or ``"cpu"``.  When the variable is not provided we fall back
+# to the original heuristic used by the script.
+
+def _get_device(env_name: str, fallback: str) -> torch.device:
+    return torch.device(os.environ.get(env_name, fallback))
+
+
 # High‑VRAM GPUs 0 & 1 host the heavy generation models.  Smaller GPUs 2 & 3
 # are reserved for diffusion/utility work so that section composer can always
-# offload to MultiBandDiffusion without exhausting memory.
-STYLE_DEVICE = torch.device("cuda:0")        # Style + Large on GPU0
-MEDIUM_DEVICE = (
-    torch.device("cuda:1")
-    if torch.cuda.is_available() and torch.cuda.device_count() > 1
-    else torch.device("cuda:0")
+# offload to MultiBandDiffusion without exhausting memory.  Users can override
+# these placements with ``STYLE_DEVICE``, ``MEDIUM_DEVICE`` ... etc.
+STYLE_DEVICE = _get_device("STYLE_DEVICE", "cuda:0")
+MEDIUM_DEVICE = _get_device(
+    "MEDIUM_DEVICE",
+    "cuda:1" if torch.cuda.is_available() and torch.cuda.device_count() > 1 else "cuda:0",
 )
-LARGE_DEVICE = STYLE_DEVICE                  # Large shares GPU0
-AUDIOGEN_DEVICE = MEDIUM_DEVICE              # AudioGen on GPU1
-DIFFUSION_DEVICE = (
-    torch.device("cuda:2")
-    if torch.cuda.is_available() and torch.cuda.device_count() > 2
-    else torch.device("cpu")
+LARGE_DEVICE = STYLE_DEVICE
+AUDIOGEN_DEVICE = _get_device("AUDIOGEN_DEVICE", str(MEDIUM_DEVICE))
+DIFFUSION_DEVICE = _get_device(
+    "DIFFUSION_DEVICE",
+    "cuda:2" if torch.cuda.is_available() and torch.cuda.device_count() > 2 else "cpu",
 )
-UTILITY_DEVICE = (
-    torch.device("cuda:3")
-    if torch.cuda.is_available() and torch.cuda.device_count() > 3
-    else DIFFUSION_DEVICE
+UTILITY_DEVICE = _get_device(
+    "UTILITY_DEVICE",
+    "cuda:3" if torch.cuda.is_available() and torch.cuda.device_count() > 3 else str(DIFFUSION_DEVICE),
 )
-# ``AudioSR`` is lightweight enough to duplicate across two GPUs. Keep a list
-# of devices to round‑robin requests between them so that long upscales don't
-# monopolise a single card.  When only one GPU is available we fall back to the
-# utility device.
-AUDIOSR_DEVICES = (
-    [torch.device("cuda:0"), torch.device("cuda:1")]
-    if torch.cuda.is_available() and torch.cuda.device_count() > 1
-    else [UTILITY_DEVICE]
-)
+
+# ``AudioSR`` is lightweight enough to duplicate across two GPUs.  The list of
+# devices can also be overridden through ``AUDIOSR_DEVICES`` using a comma
+# separated list of ``torch.device`` strings.
+if "AUDIOSR_DEVICES" in os.environ:
+    AUDIOSR_DEVICES = [torch.device(d.strip()) for d in os.environ["AUDIOSR_DEVICES"].split(",")]
+else:
+    AUDIOSR_DEVICES = (
+        [torch.device("cuda:0"), torch.device("cuda:1")]
+        if torch.cuda.is_available() and torch.cuda.device_count() > 1
+        else [UTILITY_DEVICE]
+    )
 # First device retained for backward compatibility / logging.
 AUDIOSR_DEVICE = AUDIOSR_DEVICES[0]
 
@@ -135,6 +162,55 @@ TARGET_SR = 32000
 TARGET_AC = 1
 TMP_DIR = Path("/home/archway/music/n-Track")  # writable, persistent
 TMP_DIR.mkdir(parents=True, exist_ok=True)
+
+# Persisted user settings (EQ, UI preferences, etc.) are stored as JSON within
+# the temporary directory so that they survive application restarts.
+SETTINGS_PATH = TMP_DIR / "settings.json"
+
+
+# Global font / theme overrides
+CUSTOM_CSS = """
+@import url('https://fonts.cdnfonts.com/css/nasalization');
+body, .gradio-container {
+    font-family: 'Nasalization', sans-serif;
+    color: #E8E8E8;
+    background-color: #0C0C0F;
+}
+:root {
+    --primary-hue: 150;
+    --color-primary: #6E6E6E;
+    --color-secondary: #B2B2B2;
+    --color-accent: #43FF7E;
+    --color-background-primary: #0C0C0F;
+    --color-background-secondary: #2A2A2A;
+    --color-background-tertiary: #0C0C0F;
+}
+"""
+
+
+def load_settings() -> dict:
+    """Load saved UI settings if the settings file exists."""
+
+    if SETTINGS_PATH.exists():
+        try:
+            with open(SETTINGS_PATH, "r", encoding="utf-8") as fh:
+                return json.load(fh)
+        except Exception:
+            return {}
+    return {}
+
+
+def save_settings(cfg: dict) -> None:
+    """Persist ``cfg`` to :data:`SETTINGS_PATH`."""
+
+    try:
+        with open(SETTINGS_PATH, "w", encoding="utf-8") as fh:
+            json.dump(cfg, fh)
+    except Exception:
+        pass
+
+
+USER_SETTINGS = load_settings()
 
 # Note mapping and available musical scales for harmonization.  Values are
 # sets of semitone numbers (C=0) that are considered in-key.
@@ -178,6 +254,51 @@ LARGE_MODEL = None
 # across ``AUDIOSR_DEVICES``.
 AUDIOSR_MODELS = {}
 _AUDIOSR_NEXT_DEVICE = 0
+
+
+def load_model_custom_shard(model_cls, devices):
+    """Load ``model_cls`` on every device in ``devices``.
+
+    This helper is a lightweight stand‑in for a real sharding implementation. It
+    instantiates one model per device so that requests can be divided between
+    them manually.  The function returns the list of models, which can then be
+    passed to :func:`generate_sharded`.
+    """
+
+    models = []
+    for dev in devices:
+        model = model_cls() if callable(model_cls) else model_cls
+        if hasattr(model, "to"):
+            model = model.to(dev)
+        models.append(model)
+    return models
+
+
+def generate_sharded(prompts, models):
+    """Split ``prompts`` across ``models`` and combine the generated output.
+
+    The same model architecture is expected to be loaded on every GPU.  Prompts
+    are divided into equal chunks and dispatched to each model in turn.  Results
+    are concatenated in the original order.  This keeps the implementation
+    trivial while providing a way for advanced users to experiment with manual
+    sharding strategies.
+    """
+
+    if not models:
+        return []
+    # Compute chunk size and dispatch work
+    chunk = math.ceil(len(prompts) / len(models))
+    outputs = []
+    for i, model in enumerate(models):
+        batch = prompts[i * chunk : (i + 1) * chunk]
+        if not batch:
+            continue
+        if hasattr(model, "generate"):
+            gen = model.generate(batch)
+        else:  # pragma: no cover - placeholder path
+            gen = [None] * len(batch)
+        outputs.extend(gen)
+    return outputs
 
 # ---------- FFmpeg noise control (for future waveform use) [UNCHANGED] ----------
 _old_call = sp.call
@@ -923,16 +1044,96 @@ def _ftha_align(freq: float, scale: str) -> float:
     return min(candidates, key=lambda f_c: _harmonic_distance(freq, f_c))
 
 
-def detect_bpm(path: str) -> float:
-    """Return estimated BPM of file using librosa."""
-    if not (LIBROSA_AVAILABLE and path):  # pragma: no cover - optional
+def detect_bpm(src) -> float:
+    """Return estimated BPM of a file or raw audio using librosa."""
+    if not LIBROSA_AVAILABLE or src is None:  # pragma: no cover - optional
         return 0.0
     try:
-        y, sr = librosa.load(path, sr=None, mono=True)
+        if isinstance(src, str):
+            y, sr = librosa.load(src, sr=None, mono=True)
+        elif isinstance(src, (list, tuple)) and len(src) == 2:
+            sr, y = src
+            if y.ndim > 1:
+                y = y.mean(axis=0)
+        else:
+            return 0.0
         tempo, _ = librosa.beat.beat_track(y=y, sr=sr)
         return float(tempo)
     except Exception:
         return 0.0
+
+
+def _bpm_wrap(p):
+    """Gradio helper to auto-populate a BPM slider from uploaded audio."""
+    if isinstance(p, dict):
+        p = p.get("name") or p.get("path") or p.get("data")
+    bpm_val = detect_bpm(p)
+    return gr.update(value=bpm_val)
+
+
+def _waveform_plot(p):
+    """Return a simple waveform visualization for ``p``."""
+    if not (MATPLOTLIB_AVAILABLE and LIBROSA_AVAILABLE):  # pragma: no cover
+        return None
+    try:
+        if isinstance(p, dict):
+            p = p.get("name") or p.get("path") or p.get("data")
+        if isinstance(p, str):
+            y, sr = librosa.load(p, sr=None, mono=True)
+        elif isinstance(p, (list, tuple)) and len(p) == 2:
+            sr, y = p
+            if y.ndim > 1:
+                y = y.mean(axis=0)
+        else:
+            return None
+        fig, ax = plt.subplots(figsize=(4, 2))
+        ax.plot(np.linspace(0, len(y) / sr, num=len(y)), y, color="#43FF7E")
+        ax.set_axis_off()
+        fig.tight_layout(pad=0)
+        return fig
+    except Exception:
+        return None
+
+
+def _apply_gain_file(path: str | dict | None, gain_db: float):
+    """Return a new filepath with gain applied for interactive preview."""
+    if isinstance(path, dict):
+        path = path.get("name") or path.get("path")
+    if not path or not SOUNDFILE_AVAILABLE:
+        return path
+    try:
+        if LIBROSA_AVAILABLE:
+            y, sr = librosa.load(path, sr=None, mono=True)
+        else:
+            y, sr = sf.read(path)
+            if y.ndim > 1:
+                y = y.mean(axis=1)
+        y = y * _db_to_amp(gain_db)
+        out_path = TMP_DIR / f"gain_{uuid.uuid4().hex}.wav"
+        sf.write(out_path, y, sr)
+        return str(out_path)
+    except Exception:
+        return path
+
+
+def _looper(audio: np.ndarray, sr: int, bpm: float, duration_measures: float) -> np.ndarray:
+    """Loop ``audio`` to ``duration_measures`` or pad with silence."""
+    if duration_measures <= 0 or bpm <= 0:
+        return audio
+    measure_sec = 60.0 / bpm * 4
+    measure_samples = int(measure_sec * sr)
+    total_measures = int(len(audio) / measure_samples)
+    trimmed = audio[: total_measures * measure_samples]
+    if total_measures == 0:
+        trimmed = np.zeros(0)
+    if duration_measures <= total_measures:
+        return trimmed[: int(duration_measures * measure_samples)]
+    loops = duration_measures // total_measures if total_measures else 0
+    out = np.tile(trimmed, int(loops))
+    remaining = int((duration_measures - loops * total_measures) * measure_samples)
+    if remaining > 0:
+        out = np.concatenate([out, np.zeros(remaining, dtype=audio.dtype)])
+    return out
 
 
 def harmonize_file(path: str, scale: str) -> str:
@@ -1053,14 +1254,73 @@ def _apply_pedalboard(audio: np.ndarray, sr: int, reverb: float, dist: float, ga
     return np.asarray(audio)
 
 
-def _rhythmic_gate(audio: np.ndarray, sr: int, bpm: float, depth: float) -> np.ndarray:
-    """Apply a square-wave rhythmic gate based on BPM."""
-    if depth <= 0 or bpm <= 0:
+def _rhythmic_gate(
+    audio: np.ndarray,
+    sr: int,
+    bpm: float,
+    freq: str,
+    dur: float,
+    loc: str,
+    pattern: str,
+) -> np.ndarray:
+    """Gate audio on/off according to musical timing parameters.
+
+    Parameters mirror the user's description from the prompt:
+
+    - ``freq``: string like ``"1/4"`` or ``"1"`` indicating the length of the
+      mute window in beats.  Values are clamped to ``1/32`` .. ``4`` beats.
+    - ``dur``: fraction ``0..1`` of each window that is silenced.
+    - ``loc``: where the silence sits in the window – ``start``, ``middle`` or
+      ``end``.
+    - ``pattern``: one of ``flat``, ``trance``, ``build_single``,
+      ``build_double``, ``slow`` or ``aggro``.  Patterns modulate the window
+      frequency over time using simple heuristics.
+    """
+
+    if bpm <= 0 or dur <= 0:
         return audio
-    freq = bpm / 60.0 / 2.0  # 1/8-note gating
-    t = np.arange(len(audio)) / sr
-    gate_wave = 0.5 * (1 + np.sign(np.sin(2 * np.pi * freq * t)))
-    return audio * ((1 - depth) + depth * gate_wave)
+
+    beat_dur = 60.0 / bpm
+    try:
+        num, den = freq.split("/") if "/" in freq else (freq, "1")
+        base_beats = float(num) / float(den)
+    except Exception:
+        base_beats = 1.0
+    base_beats = float(np.clip(base_beats, 1 / 32.0, 4.0))
+
+    total_beats = len(audio) / sr / beat_dur
+    # Pre-compute the gating schedule per beat to keep implementation simple
+    beat_freqs = []
+    for beat in range(int(math.ceil(total_beats))):
+        mult = 1.0
+        if pattern == "trance":
+            mult = 2.0 if beat % 2 else 1.0
+        elif pattern == "build_single":
+            mult = 2.0 ** beat
+        elif pattern == "build_double":
+            mult = 2.0 ** (beat * 2)
+        elif pattern == "slow":
+            mult = 0.5 ** beat
+        elif pattern == "aggro" and (beat + 1) % 4 == 0:
+            mult = 4.0
+        beat_freqs.append(base_beats / mult)
+
+    out = audio.copy()
+    cur = 0
+    for beat_len_beats in beat_freqs:
+        beat_len_sec = beat_len_beats * beat_dur
+        start_idx = int(cur * sr)
+        end_idx = int((cur + beat_len_beats) * sr)
+        if end_idx <= start_idx:
+            break
+        section = out[start_idx:end_idx]
+        phase = np.linspace(0, 1, len(section), endpoint=False)
+        offset = {"start": 0.0, "middle": 0.5 - dur / 2.0, "end": 1.0 - dur}.get(loc, 0.0)
+        mask = (phase < offset) | (phase > offset + dur)
+        section *= mask.astype(section.dtype)
+        out[start_idx:end_idx] = section
+        cur += beat_len_beats
+    return out
 
 
 def _glitch_audio(audio: np.ndarray, sr: int, amount: float) -> np.ndarray:
@@ -1082,39 +1342,49 @@ def _apply_stem_fx(
     dist: float,
     gate: float,
     glitch: float,
-    rhythm_gate: float,
+    rhythm_gate: dict | None,
     bpm: float,
+    loop_measures: float,
 ) -> np.ndarray:
-    """Apply glitch, rhythmic gate, and pedalboard effects to a stem."""
+    """Apply optional looper, glitch, rhythmic gate, and pedalboard effects."""
+    audio = _looper(audio, sr, bpm, loop_measures)
     audio = _glitch_audio(audio, sr, glitch)
-    audio = _rhythmic_gate(audio, sr, bpm, rhythm_gate)
+    if rhythm_gate:
+        audio = _rhythmic_gate(audio, sr, bpm, **rhythm_gate)
     audio = _apply_pedalboard(audio, sr, reverb, dist, gate)
     return audio
 
 
 def combine_stems(
     drums_path: str | None,
+    drums_fx: list[str] | None,
+    drums_bpm: float,
+    drums_gain: float,
     vocals_path: str | None,
+    vocals_fx: list[str] | None,
+    vocals_bpm: float,
+    vocals_gain: float,
     bass_path: str | None,
+    bass_fx: list[str] | None,
+    bass_bpm: float,
+    bass_gain: float,
     other_path: str | None,
-    sidechain: float,
+    other_fx: list[str] | None,
+    other_bpm: float,
+    other_gain: float,
     out_dir: str,
     prompt: str,
     reverb: float,
     dist: float,
     gate: float,
     glitch: float,
-    rhythm_gate: float,
-    drums_bpm: float,
-    vocals_bpm: float,
-    bass_bpm: float,
-    other_bpm: float,
-    drums_gain: float,
-    vocals_gain: float,
-    bass_gain: float,
-    other_gain: float,
+    rhythm_gate_freq: str,
+    rhythm_gate_dur: float,
+    rhythm_gate_loc: str,
+    rhythm_gate_pattern: str,
+    loop_measures: float,
 ):
-    """Load stems, optionally sidechain/effect, then mix."""
+    """Load stems, apply selected effects, then mix."""
 
     if not SOUNDFILE_AVAILABLE and not LIBROSA_AVAILABLE:
         raise gr.Error("soundfile or librosa required")
@@ -1122,25 +1392,49 @@ def combine_stems(
     paths = [drums_path, vocals_path, bass_path, other_path]
     gains = [drums_gain, vocals_gain, bass_gain, other_gain]
     bpms = [drums_bpm, vocals_bpm, bass_bpm, other_bpm]
-    stems = []
-    sr = 44100
+    fxs = [drums_fx, vocals_fx, bass_fx, other_fx]
+
+    stems: list[np.ndarray | None] = []
+    sr = TARGET_SR
     target_bpm = drums_bpm if drums_bpm > 0 else None
-    for p, g_db, bpm in zip(paths, gains, bpms):
+    for p, g_db, bpm, fx_list in zip(paths, gains, bpms, fxs):
         if p and Path(p).exists():
             if LIBROSA_AVAILABLE:
                 y, sr = librosa.load(p, sr=sr, mono=True)
-            elif SOUNDFILE_AVAILABLE:
+            else:
                 y, sr = sf.read(p)
                 if y.ndim > 1:
                     y = y.mean(axis=1)
-            else:  # pragma: no cover
-                raise gr.Error("librosa or soundfile required to load audio")
+                if sr != TARGET_SR:
+                    y = librosa.resample(y, orig_sr=sr, target_sr=TARGET_SR)
+                    sr = TARGET_SR
             if target_bpm and LIBROSA_AVAILABLE and bpm > 0:
                 rate = target_bpm / bpm
                 if rate != 1.0:
                     y = librosa.effects.time_stretch(y, rate)
                     bpm = target_bpm
-            y = _apply_stem_fx(y, sr, reverb, dist, gate, glitch, rhythm_gate, bpm)
+            fx_set = set(fx_list or [])
+            rg_cfg = (
+                {
+                    "freq": rhythm_gate_freq,
+                    "dur": rhythm_gate_dur,
+                    "loc": rhythm_gate_loc,
+                    "pattern": rhythm_gate_pattern,
+                }
+                if "Rhythmic Gate" in fx_set
+                else None
+            )
+            y = _apply_stem_fx(
+                y,
+                sr,
+                reverb if "Reverb" in fx_set else 0.0,
+                dist if "Distortion" in fx_set else 0.0,
+                gate if "Gate" in fx_set else 0.0,
+                glitch if "Glitch" in fx_set else 0.0,
+                rg_cfg,
+                bpm,
+                loop_measures if "Looper" in fx_set else 0.0,
+            )
             y = y * _db_to_amp(g_db)
             stems.append(y)
         else:
@@ -1148,21 +1442,11 @@ def combine_stems(
 
     max_len = max(len(s) if s is not None else 0 for s in stems)
     mix = np.zeros(max_len)
-
-    # Basic sidechain: reduce others using drum amplitude envelope
-    drum_env = None
-    if LIBROSA_AVAILABLE and stems[0] is not None and sidechain > 0:
-        env = np.abs(stems[0])
-        env = librosa.util.normalize(env)
-        drum_env = env[:max_len]
-
-    for idx, s in enumerate(stems):
+    for s in stems:
         if s is None:
             continue
         if len(s) < max_len:
             s = np.pad(s, (0, max_len - len(s)))
-        if idx != 0 and drum_env is not None:
-            s = s * (1 - sidechain * drum_env)
         mix += s
 
     out_dir = Path(out_dir) if out_dir else TMP_DIR
@@ -1181,7 +1465,11 @@ def preview_stem_fx(
     dist: float,
     gate: float,
     glitch: float,
-    rhythm_gate: float,
+    rhythm_gate_freq: str,
+    rhythm_gate_dur: float,
+    rhythm_gate_loc: str,
+    rhythm_gate_pattern: str,
+    loop_measures: float,
     bpm: float,
     gain: float,
 ):
@@ -1200,7 +1488,13 @@ def preview_stem_fx(
             y = y.mean(axis=1)
     else:  # pragma: no cover
         raise gr.Error("librosa or soundfile required to load audio")
-    y = _apply_stem_fx(y, sr, reverb, dist, gate, glitch, rhythm_gate, bpm)
+    rg_cfg = {
+        "freq": rhythm_gate_freq,
+        "dur": rhythm_gate_dur,
+        "loc": rhythm_gate_loc,
+        "pattern": rhythm_gate_pattern,
+    }
+    y = _apply_stem_fx(y, sr, reverb, dist, gate, glitch, rg_cfg, bpm, loop_measures)
     y = y * _db_to_amp(gain)
     out_path = TMP_DIR / f"preview_{uuid.uuid4().hex}.wav"
     sf.write(out_path, y, sr)
@@ -1572,7 +1866,7 @@ def master_track(
 # UI (tabs, all Enqueue) [ALTERED]
 # ============================================================================
 def ui_full(launch_kwargs):
-    with gr.Blocks() as demo:
+    with gr.Blocks(css=CUSTOM_CSS) as demo:
         gr.Markdown("# 🎛️ Music Suite — Style • AudioGen Continuation • Stems  \n*Enqueue buttons; global queue enabled*")
         queue_items = gr.State([])
         output_folder = gr.State(str(TMP_DIR))
@@ -1638,6 +1932,8 @@ def ui_full(launch_kwargs):
                 bpm = gr.Slider(40, 240, value=120, step=1, label="Tempo (BPM)")
                 beats = gr.Slider(2, 32, value=8, step=1, label="Transition Length (beats)")
                 xf_beats = gr.Slider(0.0, 8.0, value=1.0, step=0.25, label="Crossfade (beats)")
+            intro_audio.upload(_bpm_wrap, intro_audio, bpm)
+            next_audio.upload(_bpm_wrap, next_audio, bpm)
             decoder = gr.Radio(["Default", "MultiBand_Diffusion"], value="Default", label="Decoder")
             out_trim_comb = gr.Slider(-24.0, 0.0, value=-3.0, step=0.5, label="Output Trim (dB)")
             out_transition = gr.Audio(label="Transition", type="filepath")
@@ -1702,138 +1998,112 @@ def ui_full(launch_kwargs):
 
         # ----- COMBINE -----
         with gr.Tab("Combine Stems"):
-            sidechain_amt = gr.Slider(0.0, 1.0, value=0.0, step=0.05, label="Sidechain Drums → Others")
-            reverb_amt = gr.Slider(0.0, 1.0, value=0.0, step=0.05, label="Reverb")
-            dist_amt = gr.Slider(0.0, 1.0, value=0.0, step=0.05, label="Distortion")
-            gate_amt = gr.Slider(0.0, 60.0, value=0.0, step=1.0, label="Gate Threshold (dB)")
-            glitch_amt = gr.Slider(0.0, 1.0, value=0.0, step=0.05, label="Glitch Intensity")
-            rhythm_gate_amt = gr.Slider(0.0, 1.0, value=0.0, step=0.05, label="Rhythmic Gate")
-            scale_sel = gr.Dropdown(SCALE_NAMES, value="C Major", label="Harmonize Scale")
             prompt_name = gr.Textbox(label="Prompt / Name", value="")
-
-            def _bpm_wrap(p):
-                if isinstance(p, dict):
-                    p = p.get("name") or p.get("path") or p.get("data")
-                return detect_bpm(p)
-
             with gr.Row():
-                drums_c = gr.Audio(label="Drums", type="filepath")
-                bpm_d = gr.Slider(40, 220, label="Drums BPM")
-                gain_d = gr.Slider(-60.0, 6.0, value=-6.0, step=0.5, label="Gain (dB)")
-                drums_c.upload(_bpm_wrap, drums_c, bpm_d)
-                btn_pd = gr.Button("Preview FX")
-                btn_hd = gr.Button("Harmonize")
-                btn_pd.click(
-                    preview_stem_fx,
-                    [
-                        drums_c,
-                        reverb_amt,
-                        dist_amt,
-                        gate_amt,
-                        glitch_amt,
-                        rhythm_gate_amt,
-                        bpm_d,
-                        gain_d,
-                    ],
-                    drums_c,
+                with gr.Column():
+                    drums_c = gr.Audio(label="Drums", type="filepath")
+                    drums_vis = gr.Plot(label="Drums Visual")
+                    bpm_d = gr.Slider(40, 220, label="BPM")
+                    gain_d = gr.Slider(-60.0, 6.0, value=-6.0, step=0.5, label="Gain (dB)")
+                    drums_c.upload(_waveform_plot, drums_c, drums_vis)
+                    drums_c.upload(_bpm_wrap, drums_c, bpm_d)
+                    drums_c.upload(_apply_gain_file, [drums_c, gain_d], drums_c)
+                    gain_d.change(_apply_gain_file, [drums_c, gain_d], drums_c)
+                    drums_fx = gr.CheckboxGroup(
+                        ["Reverb", "Distortion", "Gate", "Glitch", "Rhythmic Gate", "Looper"],
+                        label="FX",
+                    )
+                with gr.Column():
+                    vocals_c = gr.Audio(label="Vocals", type="filepath")
+                    vocals_vis = gr.Plot(label="Vocals Visual")
+                    bpm_v = gr.Slider(40, 220, label="BPM")
+                    gain_v = gr.Slider(-60.0, 6.0, value=-6.0, step=0.5, label="Gain (dB)")
+                    vocals_c.upload(_waveform_plot, vocals_c, vocals_vis)
+                    vocals_c.upload(_bpm_wrap, vocals_c, bpm_v)
+                    vocals_c.upload(_apply_gain_file, [vocals_c, gain_v], vocals_c)
+                    gain_v.change(_apply_gain_file, [vocals_c, gain_v], vocals_c)
+                    vocals_fx = gr.CheckboxGroup(
+                        ["Reverb", "Distortion", "Gate", "Glitch", "Rhythmic Gate", "Looper"],
+                        label="FX",
+                    )
+                with gr.Column():
+                    bass_c = gr.Audio(label="Bass", type="filepath")
+                    bass_vis = gr.Plot(label="Bass Visual")
+                    bpm_b = gr.Slider(40, 220, label="BPM")
+                    gain_b = gr.Slider(-60.0, 6.0, value=-6.0, step=0.5, label="Gain (dB)")
+                    bass_c.upload(_waveform_plot, bass_c, bass_vis)
+                    bass_c.upload(_bpm_wrap, bass_c, bpm_b)
+                    bass_c.upload(_apply_gain_file, [bass_c, gain_b], bass_c)
+                    gain_b.change(_apply_gain_file, [bass_c, gain_b], bass_c)
+                    bass_fx = gr.CheckboxGroup(
+                        ["Reverb", "Distortion", "Gate", "Glitch", "Rhythmic Gate", "Looper"],
+                        label="FX",
+                    )
+                with gr.Column():
+                    other_c = gr.Audio(label="Other", type="filepath")
+                    other_vis = gr.Plot(label="Other Visual")
+                    bpm_o = gr.Slider(40, 220, label="BPM")
+                    gain_o = gr.Slider(-60.0, 6.0, value=-6.0, step=0.5, label="Gain (dB)")
+                    other_c.upload(_waveform_plot, other_c, other_vis)
+                    other_c.upload(_bpm_wrap, other_c, bpm_o)
+                    other_c.upload(_apply_gain_file, [other_c, gain_o], other_c)
+                    gain_o.change(_apply_gain_file, [other_c, gain_o], other_c)
+                    other_fx = gr.CheckboxGroup(
+                        ["Reverb", "Distortion", "Gate", "Glitch", "Rhythmic Gate", "Looper"],
+                        label="FX",
+                    )
+            with gr.Accordion("Effect Settings", open=False):
+                reverb_amt = gr.Slider(0.0, 1.0, value=0.0, step=0.05, label="Reverb")
+                dist_amt = gr.Slider(0.0, 1.0, value=0.0, step=0.05, label="Distortion")
+                gate_amt = gr.Slider(0.0, 60.0, value=0.0, step=1.0, label="Gate Threshold (dB)")
+                glitch_amt = gr.Slider(0.0, 1.0, value=0.0, step=0.05, label="Glitch Intensity")
+                rg_freq = gr.Dropdown(
+                    ["1/32", "1/16", "1/8", "1/4", "1/2", "1", "2", "4"],
+                    value="1/4",
+                    label="Gate Frequency (beats)",
                 )
-                btn_hd.click(_harm_wrap, [drums_c, scale_sel], drums_c)
-
-            with gr.Row():
-                vocals_c = gr.Audio(label="Vocals", type="filepath")
-                bpm_v = gr.Slider(40, 220, label="Vocals BPM")
-                gain_v = gr.Slider(-60.0, 6.0, value=-6.0, step=0.5, label="Gain (dB)")
-                vocals_c.upload(_bpm_wrap, vocals_c, bpm_v)
-                btn_pv = gr.Button("Preview FX")
-                btn_hv = gr.Button("Harmonize")
-                btn_pv.click(
-                    preview_stem_fx,
-                    [
-                        vocals_c,
-                        reverb_amt,
-                        dist_amt,
-                        gate_amt,
-                        glitch_amt,
-                        rhythm_gate_amt,
-                        bpm_v,
-                        gain_v,
-                    ],
-                    vocals_c,
+                rg_dur = gr.Slider(0.0, 1.0, value=0.5, step=0.05, label="Gate Duration")
+                rg_loc = gr.Dropdown(
+                    ["start", "middle", "end"], value="start", label="Gate Location"
                 )
-                btn_hv.click(_harm_wrap, [vocals_c, scale_sel], vocals_c)
-
-            with gr.Row():
-                bass_c = gr.Audio(label="Bass", type="filepath")
-                bpm_b = gr.Slider(40, 220, label="Bass BPM")
-                gain_b = gr.Slider(-60.0, 6.0, value=-6.0, step=0.5, label="Gain (dB)")
-                bass_c.upload(_bpm_wrap, bass_c, bpm_b)
-                btn_pb = gr.Button("Preview FX")
-                btn_hb = gr.Button("Harmonize")
-                btn_pb.click(
-                    preview_stem_fx,
-                    [
-                        bass_c,
-                        reverb_amt,
-                        dist_amt,
-                        gate_amt,
-                        glitch_amt,
-                        rhythm_gate_amt,
-                        bpm_b,
-                        gain_b,
-                    ],
-                    bass_c,
+                rg_pattern = gr.Dropdown(
+                    ["flat", "trance", "build_single", "build_double", "slow", "aggro"],
+                    value="flat",
+                    label="Gate Pattern",
                 )
-                btn_hb.click(_harm_wrap, [bass_c, scale_sel], bass_c)
-
-            with gr.Row():
-                other_c = gr.Audio(label="Other", type="filepath")
-                bpm_o = gr.Slider(40, 220, label="Other BPM")
-                gain_o = gr.Slider(-60.0, 6.0, value=-6.0, step=0.5, label="Gain (dB)")
-                other_c.upload(_bpm_wrap, other_c, bpm_o)
-                btn_po = gr.Button("Preview FX")
-                btn_ho = gr.Button("Harmonize")
-                btn_po.click(
-                    preview_stem_fx,
-                    [
-                        other_c,
-                        reverb_amt,
-                        dist_amt,
-                        gate_amt,
-                        glitch_amt,
-                        rhythm_gate_amt,
-                        bpm_o,
-                        gain_o,
-                    ],
-                    other_c,
-                )
-                btn_ho.click(_harm_wrap, [other_c, scale_sel], other_c)
-
-            with gr.Row():
-                out_mix = gr.Audio(label="Output Mix", type="filepath")
+                loop_dur = gr.Slider(1, 64, value=4, step=1, label="Loop Duration (measures)")
+            out_mix = gr.Audio(label="Output Mix", type="filepath")
             btn_combine = gr.Button("Combine", variant="primary")
             btn_combine.click(
                 combine_stems,
                 inputs=[
                     drums_c,
+                    drums_fx,
+                    bpm_d,
+                    gain_d,
                     vocals_c,
+                    vocals_fx,
+                    bpm_v,
+                    gain_v,
                     bass_c,
+                    bass_fx,
+                    bpm_b,
+                    gain_b,
                     other_c,
-                    sidechain_amt,
+                    other_fx,
+                    bpm_o,
+                    gain_o,
                     output_folder,
                     prompt_name,
                     reverb_amt,
                     dist_amt,
                     gate_amt,
                     glitch_amt,
-                    rhythm_gate_amt,
-                    bpm_d,
-                    bpm_v,
-                    bpm_b,
-                    bpm_o,
-                    gain_d,
-                    gain_v,
-                    gain_b,
-                    gain_o,
+                    rg_freq,
+                    rg_dur,
+                    rg_loc,
+                    rg_pattern,
+                    loop_dur,
                 ],
                 outputs=out_mix,
             )
@@ -1851,13 +2121,14 @@ def ui_full(launch_kwargs):
             bass_width = gr.Slider(0.0, 1.0, value=0.0, step=0.1, label="Bass Width", info="0=mono")
             freq_sliders = []
             with gr.Accordion("Frequency Cuts", open=False):
-                for label, low, high, desc in FREQ_BANDS:
+                eq_defaults = USER_SETTINGS.get("eq_gains", [0.0] * len(FREQ_BANDS))
+                for idx, (label, low, high, desc) in enumerate(FREQ_BANDS):
                     rng = f"{low}-{high} Hz" if low != high else f"{low} Hz"
                     freq_sliders.append(
                         gr.Slider(
                             -12.0,
                             12.0,
-                            value=0.0,
+                            value=eq_defaults[idx] if idx < len(eq_defaults) else 0.0,
                             step=0.5,
                             label=f"{label} ({rng})",
                             info=desc,
@@ -1887,6 +2158,14 @@ def ui_full(launch_kwargs):
             out_box = gr.Textbox(value=str(TMP_DIR), label="Output Folder")
             set_btn = gr.Button("Set")
             set_btn.click(lambda x: x, inputs=out_box, outputs=output_folder)
+
+            save_btn = gr.Button("Save EQ Settings")
+
+            def _save_eq_settings(*gains):
+                cfg = {"eq_gains": list(gains)}
+                save_settings(cfg)
+
+            save_btn.click(_save_eq_settings, freq_sliders, None)
 
         # Global queue
         demo.queue(concurrency_count=1, max_size=32).launch(**launch_kwargs)
