@@ -219,6 +219,13 @@ def save_settings(cfg: dict) -> None:
 
 USER_SETTINGS = load_settings()
 
+# Persisted model/sharding configuration pulled from settings
+CUSTOM_SHARD_RAW = USER_SETTINGS.get("shard_devices", "")
+CUSTOM_SHARD_DEVICES = [
+    torch.device(d.strip()) for d in CUSTOM_SHARD_RAW.split(",") if d.strip()
+]
+MODEL_OPTIONS = USER_SETTINGS.get("model_options", ["Style", "AudioGen"])
+
 # Note mapping and available musical scales for harmonization.  Values are
 # sets of semitone numbers (C=0) that are considered in-key.
 NOTE_TO_INT = {
@@ -803,9 +810,14 @@ def section_generate_and_combine(
     intro = _prep_to_32k(intro_audio).cpu()
     outro = _prep_to_32k(next_audio).cpu()
     transition = _load_audio_file(trans_path)
-    xf_sec = float(xf_beats) * 60.0 / float(bpm)
-    assembled = _crossfade_concat(intro, transition, TARGET_SR, xf_sec=xf_sec)
-    assembled = _crossfade_concat(assembled, outro, TARGET_SR, xf_sec=xf_sec)
+    # ``xf_beats`` represents the total desired overlap in beats.  Split the
+    # value across both boundaries so that an 8‑beat setting behaves like a DJ
+    # style 8‑beat transition (4 beats into the bridge and 4 beats out) rather
+    # than two full 8‑beat fades that leave a gap between clips.
+    xf_total = float(xf_beats) * 60.0 / float(bpm)
+    half_xf = xf_total / 2.0
+    assembled = _crossfade_concat(intro, transition, TARGET_SR, xf_sec=half_xf)
+    assembled = _crossfade_concat(assembled, outro, TARGET_SR, xf_sec=half_xf)
     return _write_wav(
         assembled,
         TARGET_SR,
@@ -1076,6 +1088,14 @@ def _bpm_wrap(p):
         p = p.get("name") or p.get("path") or p.get("data")
     bpm_val = detect_bpm(p)
     return gr.update(value=bpm_val)
+
+
+def _bpm_wrap_with_readout(p):
+    """Update BPM slider and provide numeric readout for uploads."""
+    if isinstance(p, dict):
+        p = p.get("name") or p.get("path") or p.get("data")
+    bpm_val = detect_bpm(p)
+    return gr.update(value=bpm_val), bpm_val
 
 
 def _waveform_plot(p):
@@ -2049,8 +2069,9 @@ def ui_full(launch_kwargs):
                 bpm = gr.Slider(40, 240, value=120, step=1, label="Tempo (BPM)")
                 beats = gr.Slider(2, 32, value=8, step=1, label="Transition Length (beats)")
                 xf_beats = gr.Slider(0.0, 8.0, value=1.0, step=0.25, label="Crossfade (beats)")
-            intro_audio.upload(_bpm_wrap, intro_audio, bpm)
-            next_audio.upload(_bpm_wrap, next_audio, bpm)
+            bpm_detect = gr.Number(value=0, label="Detected BPM", interactive=False)
+            intro_audio.upload(_bpm_wrap_with_readout, intro_audio, [bpm, bpm_detect])
+            next_audio.upload(_bpm_wrap_with_readout, next_audio, [bpm, bpm_detect])
             decoder = gr.Radio(["Default", "MultiBand_Diffusion"], value="Default", label="Decoder")
             out_trim_comb = gr.Slider(-24.0, 0.0, value=-3.0, step=0.5, label="Output Trim (dB)")
             out_transition = gr.Audio(label="Transition", type="filepath")
@@ -2413,13 +2434,34 @@ def ui_full(launch_kwargs):
             set_btn = gr.Button("Set")
             set_btn.click(lambda x: x, inputs=out_box, outputs=output_folder)
 
-            save_btn = gr.Button("Save EQ Settings")
+            shard_box = gr.Textbox(
+                value=CUSTOM_SHARD_RAW,
+                label="Custom Shard Devices",
+                placeholder="cuda:0,cuda:1",
+            )
+            model_opts = gr.CheckboxGroup(
+                ["Style", "Medium", "Large", "AudioGen"],
+                value=MODEL_OPTIONS,
+                label="Models",
+            )
 
-            def _save_eq_settings(*gains):
-                cfg = {"eq_gains": list(gains)}
+            save_btn = gr.Button("Save Settings")
+
+            def _save_settings(shard_str, models, *gains):
+                global CUSTOM_SHARD_RAW, CUSTOM_SHARD_DEVICES, MODEL_OPTIONS
+                CUSTOM_SHARD_RAW = shard_str
+                CUSTOM_SHARD_DEVICES = [
+                    torch.device(d.strip()) for d in shard_str.split(",") if d.strip()
+                ]
+                MODEL_OPTIONS = models
+                cfg = {
+                    "eq_gains": list(gains),
+                    "shard_devices": shard_str,
+                    "model_options": models,
+                }
                 save_settings(cfg)
 
-            save_btn.click(_save_eq_settings, freq_sliders, None)
+            save_btn.click(_save_settings, [shard_box, model_opts, *freq_sliders], None)
 
         # Global queue
         demo.queue(concurrency_count=1, max_size=32).launch(**launch_kwargs)
