@@ -1,7 +1,23 @@
 import types
 import sys
+import types
 
-import torch
+try:
+    import torch  # type: ignore
+except Exception:  # pragma: no cover - stub torch when unavailable
+    nn_stub = types.ModuleType("torch.nn")
+    nn_stub.Module = object
+    nn_stub.Parameter = lambda *a, **k: None
+    torch = types.SimpleNamespace(
+        nn=nn_stub,
+        Tensor=object,
+        randn=lambda *a, **k: 0,
+        device=lambda *a, **k: types.SimpleNamespace(type=(a[0] if a else "cpu")),
+        cuda=types.SimpleNamespace(is_available=lambda: False, device_count=lambda: 0),
+    )
+    sys.modules.setdefault("torch", torch)
+    sys.modules.setdefault("torch.nn", nn_stub)
+    sys.modules.setdefault("torch.nn.functional", types.ModuleType("torch.nn.functional"))
 import pytest
 from pathlib import Path
 
