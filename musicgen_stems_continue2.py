@@ -18,8 +18,18 @@ import sys
 import shutil
 import numpy as np
 
-import torch
-import torch.nn.functional as F
+try:
+    import torch
+    import torch.nn.functional as F
+except Exception:  # pragma: no cover - allow import without torch
+    import types
+    torch = types.SimpleNamespace(
+        nn=types.SimpleNamespace(Module=object, Parameter=lambda *a, **k: None),
+        Tensor=object,
+        device=lambda *a, **k: types.SimpleNamespace(type="cpu"),
+        cuda=types.SimpleNamespace(is_available=lambda: False, device_count=lambda: 0),
+    )
+    F = types.SimpleNamespace()
 import gradio as gr
 
 from audiocraft.data.audio_utils import convert_audio
@@ -69,6 +79,12 @@ try:  # soundfile for harmonize output writing
     SOUNDFILE_AVAILABLE = True
 except Exception:  # pragma: no cover - optional runtime dep
     SOUNDFILE_AVAILABLE = False
+
+try:  # MIDI export for harmonization
+    import mido  # type: ignore
+    MIDO_AVAILABLE = True
+except Exception:  # pragma: no cover - optional runtime dep
+    MIDO_AVAILABLE = False
 
 # ---------- Devices [ALTERED] ----------
 # High‑VRAM GPUs 0 & 1 host the heavy generation models.  Smaller GPUs 2 & 3
@@ -582,6 +598,86 @@ def compose_sections_ui(init_audio, count, *vals):
     return compose_sections(sections, init_audio, bpm, xf_beats, decoder, out_trim_db)
 
 # ============================================================================
+# SECTION COMBINER [NEW]
+# ============================================================================
+
+def _load_audio_file(path: str) -> torch.Tensor:
+    """Load ``path`` as mono 32k tensor."""
+    if not path:
+        raise gr.Error("Internal error: missing audio path.")
+    if LIBROSA_AVAILABLE:  # pragma: no branch - simple runtime check
+        wav, sr = librosa.load(path, sr=None, mono=True)
+        wav_t = torch.from_numpy(wav).unsqueeze(0)
+    elif SOUNDFILE_AVAILABLE:
+        wav, sr = sf.read(path)
+        wav_t = torch.from_numpy(wav.T)
+    else:  # pragma: no cover - optional dependency
+        raise gr.Error("Please install librosa or soundfile to combine sections.")
+    wav_t = _ensure_2d(wav_t)
+    if sr != TARGET_SR or wav_t.shape[0] != TARGET_AC:
+        wav_t = convert_audio(wav_t, sr, TARGET_SR, TARGET_AC)
+    return wav_t
+
+
+def section_generate_transition(model, intro_audio, prompt, bpm, beats, decoder, out_trim_db):
+    """Generate a transition segment from ``intro_audio`` using ``model``."""
+    duration = float(beats) * 60.0 / float(bpm)
+    if model == "Style":
+        return style_predict(
+            prompt,
+            intro_audio,
+            duration=duration,
+            decoder=decoder,
+            out_trim_db=float(out_trim_db),
+        )
+    # Default to AudioGen continuation
+    lookback = min(6.0, duration)
+    return audiogen_continuation(
+        intro_audio,
+        prompt,
+        lookback_sec=lookback,
+        duration=int(duration),
+        out_trim_db=float(out_trim_db),
+    )
+
+
+def section_generate_and_combine(
+    model,
+    intro_audio,
+    next_audio,
+    prompt,
+    bpm,
+    beats,
+    xf_beats,
+    decoder,
+    out_trim_db,
+):
+    """Generate transition and overlap with both input clips."""
+    if intro_audio is None or next_audio is None:
+        raise gr.Error("Please provide both input audio clips.")
+    trans_path = section_generate_transition(
+        model,
+        intro_audio,
+        prompt,
+        bpm,
+        beats,
+        decoder,
+        out_trim_db,
+    )
+    intro = _prep_to_32k(intro_audio).cpu()
+    outro = _prep_to_32k(next_audio).cpu()
+    transition = _load_audio_file(trans_path)
+    xf_sec = float(xf_beats) * 60.0 / float(bpm)
+    assembled = _crossfade_concat(intro, transition, TARGET_SR, xf_sec=xf_sec)
+    assembled = _crossfade_concat(assembled, outro, TARGET_SR, xf_sec=xf_sec)
+    return _write_wav(
+        assembled,
+        TARGET_SR,
+        stem="section_combined",
+        trim_db=float(out_trim_db),
+    )
+
+# ============================================================================
 # STYLE TAB (MusicGen-Style) [UNCHANGED intent; better writer]
 # ============================================================================
 def style_load_model():
@@ -794,14 +890,29 @@ def _midi_to_freq(midi: float) -> float:
     return 440.0 * (2 ** ((midi - 69) / 12))
 
 
-def _nearest_scale_pitch(freq: float, scale: str) -> float:
+def _build_scale_freqs(scale: str) -> list[float]:
+    allowed = SCALE_NOTES.get(scale, SCALE_NOTES["C Major"])
+    freqs = []
+    for midi in range(21, 109):  # piano range
+        if midi % 12 in allowed:
+            freqs.append(_midi_to_freq(midi))
+    return freqs
+
+
+def _harmonic_distance(f_in: float, f_c: float) -> float:
+    dist = 0.0
+    for h in (1, 2, 3):
+        target = h * f_in
+        nearest = round(target / f_c) * f_c
+        dist += abs(target - nearest)
+    return dist
+
+
+def _ftha_align(freq: float, scale: str) -> float:
     if freq <= 0:
         return freq
-    midi = round(_freq_to_midi(freq))
-    allowed = SCALE_NOTES.get(scale, SCALE_NOTES["C Major"])
-    while (midi % 12) not in allowed:
-        midi += 1
-    return _midi_to_freq(midi)
+    candidates = _build_scale_freqs(scale)
+    return min(candidates, key=lambda f_c: _harmonic_distance(freq, f_c))
 
 
 def detect_bpm(path: str) -> float:
@@ -817,36 +928,81 @@ def detect_bpm(path: str) -> float:
 
 
 def harmonize_file(path: str, scale: str) -> str:
-    """Apply simple harmonization to ``path`` in-place and return new path."""
+    """Pitch-align audio to ``scale`` using FTHA and export MIDI."""
     if not (LIBROSA_AVAILABLE and SOUNDFILE_AVAILABLE and path):  # pragma: no cover
         raise gr.Error("librosa and soundfile are required for harmonize")
 
     y, sr = librosa.load(path, sr=44100, mono=True)
-    f0 = librosa.yin(y, fmin=50, fmax=1000, frame_length=2048, hop_length=512)
+    hop = 512
+    frame = 2048
+    f0 = librosa.yin(y, fmin=50, fmax=1000, frame_length=frame, hop_length=hop)
 
+    window = np.hanning(frame)
     harmonized = np.zeros_like(y)
-    for i, freq in enumerate(f0):
-        if freq <= 0:
-            continue
-        root = _nearest_scale_pitch(freq, scale)
-        start = i * 512
-        end = min(start + 2048, len(y))
-        t = np.arange(start, end) / sr
-        root_wave = np.sin(2 * np.pi * root * t)
-        harm_waves = []
-        for interval in [4, 7]:  # major 3rd, perfect 5th
-            new_freq = _midi_to_freq(_freq_to_midi(root) + interval)
-            harm_waves.append(np.sin(2 * np.pi * new_freq * t))
-        frame_wave = root_wave + sum(harm_waves)
-        frame_wave /= (1 + len(harm_waves))
-        harmonized[start:end] += frame_wave[: end - start]
+    weight = np.zeros_like(y)
 
+    mid = None
+    track = None
+    frame_ticks = 0
+    if MIDO_AVAILABLE:
+        mid = mido.MidiFile()
+        track = mido.MidiTrack()
+        mid.tracks.append(track)
+        frame_ticks = int((hop / sr) * mid.ticks_per_beat)
+
+    last_note = None
+    dur_ticks = 0
+
+    for i, freq in enumerate(f0):
+        start = i * hop
+        end = min(start + frame, len(y))
+        segment = y[start:end]
+        if freq <= 0 or end - start <= 0:
+            harmonized[start:end] += segment * window[: end - start]
+            weight[start:end] += window[: end - start]
+            if MIDO_AVAILABLE and last_note is not None:
+                track.append(mido.Message("note_off", note=last_note, time=dur_ticks))
+                last_note = None
+                dur_ticks = 0
+            continue
+
+        target = _ftha_align(freq, scale)
+        shift = 12 * math.log2(target / freq)
+        shifted = librosa.effects.pitch_shift(segment, sr, shift)
+        if np.max(np.abs(shifted)) > 0:
+            rms_orig = np.sqrt(np.mean(segment**2) + 1e-9)
+            rms_new = np.sqrt(np.mean(shifted**2) + 1e-9)
+            shifted *= rms_orig / rms_new
+
+        length = min(len(shifted), len(window))
+        harmonized[start:start + length] += shifted[:length] * window[:length]
+        weight[start:start + length] += window[:length]
+
+        if MIDO_AVAILABLE:
+            note = int(round(_freq_to_midi(target)))
+            if note != last_note:
+                if last_note is not None:
+                    track.append(mido.Message("note_off", note=last_note, time=dur_ticks))
+                track.append(mido.Message("note_on", note=note, velocity=64, time=0))
+                last_note = note
+                dur_ticks = frame_ticks
+            else:
+                dur_ticks += frame_ticks
+
+    if MIDO_AVAILABLE and last_note is not None:
+        track.append(mido.Message("note_off", note=last_note, time=dur_ticks))
+
+    harmonized = np.divide(harmonized, weight, out=np.zeros_like(harmonized), where=weight > 0)
     if np.max(np.abs(harmonized)) > 0:
         harmonized /= np.max(np.abs(harmonized))
 
-    out_path = Path(path).with_suffix("")
     out_file = TMP_DIR / f"harm_{uuid.uuid4().hex}.wav"
     sf.write(out_file, harmonized, sr)
+
+    if MIDO_AVAILABLE:
+        out_midi = TMP_DIR / f"harm_{uuid.uuid4().hex}.mid"
+        mid.save(out_midi)
+
     return str(out_file)
 
 
@@ -876,6 +1032,10 @@ def combine_stems(
     reverb: float,
     dist: float,
     gate: float,
+    drums_gain: float,
+    vocals_gain: float,
+    bass_gain: float,
+    other_gain: float,
 ):
     """Load stems, optionally harmonize/sidechain/effect, then mix."""
 
@@ -883,9 +1043,10 @@ def combine_stems(
         raise gr.Error("soundfile or librosa required")
 
     paths = [drums_path, vocals_path, bass_path, other_path]
+    gains = [drums_gain, vocals_gain, bass_gain, other_gain]
     stems = []
     sr = 44100
-    for p in paths:
+    for p, g in zip(paths, gains):
         if p and Path(p).exists():
             if LIBROSA_AVAILABLE:
                 y, sr = librosa.load(p, sr=sr, mono=True)
@@ -895,6 +1056,7 @@ def combine_stems(
                     y = y.mean(axis=1)
             else:  # pragma: no cover
                 raise gr.Error("librosa or soundfile required to load audio")
+            y = y * g
             stems.append(y)
         else:
             stems.append(None)
@@ -1348,39 +1510,32 @@ def ui_full(launch_kwargs):
                 queue=True,
             )
 
-        # ----- SECTION COMPOSER -----
-        with gr.Tab("Section Composer"):
-            init_audio = gr.Audio(label="Initial Audio (optional)", type="numpy")
-            section_count = gr.State(1)
-            section_rows = []
-            section_inputs = []
-            for i in range(MAX_SECTIONS):
-                with gr.Row(visible=(i == 0)) as row:
-                    sec_type = gr.Dropdown(
-                        ["Intro", "Build", "Break", "Drop", "Bridge", "Bed", "Outro"],
-                        value="Intro",
-                        label=f"Section {i+1}",
-                    )
-                    sec_prompt = gr.Textbox(label="Prompt")
-                    sec_length = gr.Number(label="Length (s)", value=8)
-                section_rows.append(row)
-                section_inputs.extend([sec_type, sec_prompt, sec_length])
-            with gr.Row():
-                btn_add = gr.Button("Add Section")
-                btn_del = gr.Button("Delete Section")
-            btn_add.click(add_section, inputs=section_count, outputs=[section_count] + section_rows, queue=False)
-            btn_del.click(remove_section, inputs=section_count, outputs=[section_count] + section_rows, queue=False)
+        # ----- SECTION COMBINER -----
+        with gr.Tab("Section Combiner"):
+            intro_audio = gr.Audio(label="Intro Audio", type="numpy")
+            next_audio = gr.Audio(label="Next Audio", type="numpy")
+            prompt = gr.Textbox(label="Prompt")
+            model_choice = gr.Radio(["AudioGen", "Style"], value="AudioGen", label="Generator")
             with gr.Row():
                 bpm = gr.Slider(40, 240, value=120, step=1, label="Tempo (BPM)")
+                beats = gr.Slider(2, 32, value=8, step=1, label="Transition Length (beats)")
                 xf_beats = gr.Slider(0.0, 8.0, value=1.0, step=0.25, label="Crossfade (beats)")
             decoder = gr.Radio(["Default", "MultiBand_Diffusion"], value="Default", label="Decoder")
-            out_trim_sections = gr.Slider(-24.0, 0.0, value=-3.0, step=0.5, label="Output Trim (dB)")
-            out_sections = gr.Audio(label="Output", type="filepath")
-            btn_sections = gr.Button("Enqueue", variant="primary")
-            btn_sections.click(
-                compose_sections_ui,
-                inputs=[init_audio, section_count] + section_inputs + [bpm, xf_beats, decoder, out_trim_sections],
-                outputs=out_sections,
+            out_trim_comb = gr.Slider(-24.0, 0.0, value=-3.0, step=0.5, label="Output Trim (dB)")
+            out_transition = gr.Audio(label="Transition", type="filepath")
+            out_full = gr.Audio(label="Combined Output", type="filepath")
+            btn_trans = gr.Button("Generate Transition")
+            btn_full = gr.Button("Generate & Combine", variant="primary")
+            btn_trans.click(
+                section_generate_transition,
+                inputs=[model_choice, intro_audio, prompt, bpm, beats, decoder, out_trim_comb],
+                outputs=out_transition,
+                queue=True,
+            )
+            btn_full.click(
+                section_generate_and_combine,
+                inputs=[model_choice, intro_audio, next_audio, prompt, bpm, beats, xf_beats, decoder, out_trim_comb],
+                outputs=out_full,
                 queue=True,
             )
 
@@ -1438,6 +1593,7 @@ def ui_full(launch_kwargs):
             with gr.Row():
                 drums_c = gr.Audio(label="Drums", type="filepath")
                 bpm_d = gr.Slider(40, 220, label="Drums BPM")
+                gain_d = gr.Slider(0.0, 2.0, value=1.0, step=0.05, label="Gain")
                 drums_c.change(_bpm_wrap, drums_c, bpm_d)
                 btn_hd = gr.Button("Harmonize")
                 btn_hd.click(_harm_wrap, [drums_c, scale_sel], drums_c)
@@ -1445,6 +1601,7 @@ def ui_full(launch_kwargs):
             with gr.Row():
                 vocals_c = gr.Audio(label="Vocals", type="filepath")
                 bpm_v = gr.Slider(40, 220, label="Vocals BPM")
+                gain_v = gr.Slider(0.0, 2.0, value=1.0, step=0.05, label="Gain")
                 vocals_c.change(_bpm_wrap, vocals_c, bpm_v)
                 btn_hv = gr.Button("Harmonize")
                 btn_hv.click(_harm_wrap, [vocals_c, scale_sel], vocals_c)
@@ -1452,6 +1609,7 @@ def ui_full(launch_kwargs):
             with gr.Row():
                 bass_c = gr.Audio(label="Bass", type="filepath")
                 bpm_b = gr.Slider(40, 220, label="Bass BPM")
+                gain_b = gr.Slider(0.0, 2.0, value=1.0, step=0.05, label="Gain")
                 bass_c.change(_bpm_wrap, bass_c, bpm_b)
                 btn_hb = gr.Button("Harmonize")
                 btn_hb.click(_harm_wrap, [bass_c, scale_sel], bass_c)
@@ -1459,6 +1617,7 @@ def ui_full(launch_kwargs):
             with gr.Row():
                 other_c = gr.Audio(label="Other", type="filepath")
                 bpm_o = gr.Slider(40, 220, label="Other BPM")
+                gain_o = gr.Slider(0.0, 2.0, value=1.0, step=0.05, label="Gain")
                 other_c.change(_bpm_wrap, other_c, bpm_o)
                 btn_ho = gr.Button("Harmonize")
                 btn_ho.click(_harm_wrap, [other_c, scale_sel], other_c)
@@ -1467,7 +1626,23 @@ def ui_full(launch_kwargs):
             btn_combine = gr.Button("Combine", variant="primary")
             btn_combine.click(
                 combine_stems,
-                inputs=[drums_c, vocals_c, bass_c, other_c, scale_sel, sidechain_amt, output_folder, prompt_name, reverb_amt, dist_amt, gate_amt],
+                inputs=[
+                    drums_c,
+                    vocals_c,
+                    bass_c,
+                    other_c,
+                    scale_sel,
+                    sidechain_amt,
+                    output_folder,
+                    prompt_name,
+                    reverb_amt,
+                    dist_amt,
+                    gate_amt,
+                    gain_d,
+                    gain_v,
+                    gain_b,
+                    gain_o,
+                ],
                 outputs=out_mix,
             )
 
