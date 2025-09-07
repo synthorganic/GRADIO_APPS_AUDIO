@@ -181,16 +181,16 @@ CUSTOM_CSS = """
 body, .gradio-container {
     font-family: 'Nasalization', sans-serif;
     color: #E8E8E8;
-    background-color: #0C0C0F;
+    background-color: #475043;
 }
 :root {
     --primary-hue: 150;
-    --color-primary: #6E6E6E;
-    --color-secondary: #B2B2B2;
+    --color-primary: #434750;
+    --color-secondary: #475043;
     --color-accent: #43FF7E;
-    --color-background-primary: #0C0C0F;
-    --color-background-secondary: #2A2A2A;
-    --color-background-tertiary: #0C0C0F;
+    --color-background-primary: #475043;
+    --color-background-secondary: #434750;
+    --color-background-tertiary: #434750;
 }
 """
 
@@ -1982,7 +1982,9 @@ def master_track(
 # ============================================================================
 def ui_full(launch_kwargs):
     with gr.Blocks(css=CUSTOM_CSS) as demo:
-        gr.Markdown("# 🎛️ Music Suite — Style • AudioGen Continuation • Stems  \n*Enqueue buttons; global queue enabled*")
+        demo.title = "World's Last Music App by Fortheye"
+        gr.Markdown("# World's Last Music App by Fortheye")
+        # Image assets were removed to keep the repository text-only.
         queue_items = gr.State([])
         output_folder = gr.State(str(TMP_DIR))
         # Harmonization controls removed due to fidelity concerns
