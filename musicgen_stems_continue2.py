@@ -69,7 +69,7 @@ UTILITY_DEVICE = (
     else DIFFUSION_DEVICE
 )
 AUDIOSR_DEVICE = (
-    torch.device("cuda:1")
+    torch.device("cuda:0")
     if torch.cuda.is_available() and torch.cuda.device_count() > 1
     else UTILITY_DEVICE
 )
@@ -1247,5 +1247,6 @@ if __name__ == "__main__":
     warnings.filterwarnings("ignore", category=UserWarning)
     logging.basicConfig(level=logging.INFO)
     ui_full({"server_name": args.listen, "server_port": args.port})
+
 
 
