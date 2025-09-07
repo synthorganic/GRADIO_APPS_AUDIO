@@ -4,6 +4,10 @@ import types
 
 try:
     import torch  # type: ignore
+    # ``test_master_simple`` may have injected a minimal ``torch`` stub that
+    # lacks ``nn.Module``; ensure we fall back to our own stub in that case.
+    if not hasattr(getattr(torch, "nn", object), "Module"):
+        raise Exception
 except Exception:  # pragma: no cover - stub torch when unavailable
     nn_stub = types.ModuleType("torch.nn")
     nn_stub.Module = object
@@ -15,9 +19,9 @@ except Exception:  # pragma: no cover - stub torch when unavailable
         device=lambda *a, **k: types.SimpleNamespace(type=(a[0] if a else "cpu")),
         cuda=types.SimpleNamespace(is_available=lambda: False, device_count=lambda: 0),
     )
-    sys.modules.setdefault("torch", torch)
-    sys.modules.setdefault("torch.nn", nn_stub)
-    sys.modules.setdefault("torch.nn.functional", types.ModuleType("torch.nn.functional"))
+    sys.modules["torch"] = torch
+    sys.modules["torch.nn"] = nn_stub
+    sys.modules["torch.nn.functional"] = types.ModuleType("torch.nn.functional")
 import pytest
 from pathlib import Path
 
