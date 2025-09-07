@@ -196,6 +196,11 @@ def _rms(x: torch.Tensor) -> float:
     return float(torch.sqrt(torch.clamp((x ** 2).mean(), min=1e-12)).item())
 
 
+def _db_to_amp(db: float) -> float:
+    """Convert decibel gain to linear amplitude."""
+    return 10 ** (db / 20.0)
+
+
 def _move_to_device(obj, device: torch.device, _seen: set[int] | None = None):
     """Recursively move ``obj`` and its tensors to ``device``.
 
@@ -1048,18 +1053,58 @@ def _apply_pedalboard(audio: np.ndarray, sr: int, reverb: float, dist: float, ga
     return np.asarray(audio)
 
 
+def _rhythmic_gate(audio: np.ndarray, sr: int, bpm: float, depth: float) -> np.ndarray:
+    """Apply a square-wave rhythmic gate based on BPM."""
+    if depth <= 0 or bpm <= 0:
+        return audio
+    freq = bpm / 60.0 / 2.0  # 1/8-note gating
+    t = np.arange(len(audio)) / sr
+    gate_wave = 0.5 * (1 + np.sign(np.sin(2 * np.pi * freq * t)))
+    return audio * ((1 - depth) + depth * gate_wave)
+
+
+def _glitch_audio(audio: np.ndarray, sr: int, amount: float) -> np.ndarray:
+    """Reverse random short segments to create a simple glitch effect."""
+    if amount <= 0:
+        return audio
+    seg_len = max(1, int(0.1 * sr))
+    audio = audio.copy()
+    for start in range(0, len(audio) - seg_len, seg_len):
+        if np.random.rand() < amount:
+            audio[start : start + seg_len] = audio[start : start + seg_len][::-1]
+    return audio
+
+
+def _apply_stem_fx(
+    audio: np.ndarray,
+    sr: int,
+    reverb: float,
+    dist: float,
+    gate: float,
+    glitch: float,
+    rhythm_gate: float,
+    bpm: float,
+) -> np.ndarray:
+    """Apply glitch, rhythmic gate, and pedalboard effects to a stem."""
+    audio = _glitch_audio(audio, sr, glitch)
+    audio = _rhythmic_gate(audio, sr, bpm, rhythm_gate)
+    audio = _apply_pedalboard(audio, sr, reverb, dist, gate)
+    return audio
+
+
 def combine_stems(
     drums_path: str | None,
     vocals_path: str | None,
     bass_path: str | None,
     other_path: str | None,
-    scale: str,
     sidechain: float,
     out_dir: str,
     prompt: str,
     reverb: float,
     dist: float,
     gate: float,
+    glitch: float,
+    rhythm_gate: float,
     drums_bpm: float,
     vocals_bpm: float,
     bass_bpm: float,
@@ -1069,7 +1114,7 @@ def combine_stems(
     bass_gain: float,
     other_gain: float,
 ):
-    """Load stems, optionally harmonize/sidechain/effect, then mix."""
+    """Load stems, optionally sidechain/effect, then mix."""
 
     if not SOUNDFILE_AVAILABLE and not LIBROSA_AVAILABLE:
         raise gr.Error("soundfile or librosa required")
@@ -1080,7 +1125,7 @@ def combine_stems(
     stems = []
     sr = 44100
     target_bpm = drums_bpm if drums_bpm > 0 else None
-    for p, g, bpm in zip(paths, gains, bpms):
+    for p, g_db, bpm in zip(paths, gains, bpms):
         if p and Path(p).exists():
             if LIBROSA_AVAILABLE:
                 y, sr = librosa.load(p, sr=sr, mono=True)
@@ -1094,7 +1139,9 @@ def combine_stems(
                 rate = target_bpm / bpm
                 if rate != 1.0:
                     y = librosa.effects.time_stretch(y, rate)
-            y = y * g
+                    bpm = target_bpm
+            y = _apply_stem_fx(y, sr, reverb, dist, gate, glitch, rhythm_gate, bpm)
+            y = y * _db_to_amp(g_db)
             stems.append(y)
         else:
             stems.append(None)
@@ -1118,8 +1165,6 @@ def combine_stems(
             s = s * (1 - sidechain * drum_env)
         mix += s
 
-    mix = _apply_pedalboard(mix, sr, reverb, dist, gate)
-
     out_dir = Path(out_dir) if out_dir else TMP_DIR
     out_dir.mkdir(parents=True, exist_ok=True)
     prefix = (prompt or "output")[:10]
@@ -1127,6 +1172,38 @@ def combine_stems(
     fname = f"{prefix}_combine_{orig}"
     out_path = out_dir / fname
     sf.write(out_path, mix, sr)
+    return str(out_path)
+
+
+def preview_stem_fx(
+    audio_path: str | None,
+    reverb: float,
+    dist: float,
+    gate: float,
+    glitch: float,
+    rhythm_gate: float,
+    bpm: float,
+    gain: float,
+):
+    """Load a stem, apply effects, and return a preview filepath."""
+    if not audio_path or not Path(audio_path).exists():
+        raise gr.Error("no audio provided")
+    if not SOUNDFILE_AVAILABLE and not LIBROSA_AVAILABLE:
+        raise gr.Error("soundfile or librosa required")
+
+    sr = 44100
+    if LIBROSA_AVAILABLE:
+        y, sr = librosa.load(audio_path, sr=sr, mono=True)
+    elif SOUNDFILE_AVAILABLE:
+        y, sr = sf.read(audio_path)
+        if y.ndim > 1:
+            y = y.mean(axis=1)
+    else:  # pragma: no cover
+        raise gr.Error("librosa or soundfile required to load audio")
+    y = _apply_stem_fx(y, sr, reverb, dist, gate, glitch, rhythm_gate, bpm)
+    y = y * _db_to_amp(gain)
+    out_path = TMP_DIR / f"preview_{uuid.uuid4().hex}.wav"
+    sf.write(out_path, y, sr)
     return str(out_path)
 
 def _matchering_match(target: str, reference: str, output: str) -> None:
@@ -1499,7 +1576,7 @@ def ui_full(launch_kwargs):
         gr.Markdown("# 🎛️ Music Suite — Style • AudioGen Continuation • Stems  \n*Enqueue buttons; global queue enabled*")
         queue_items = gr.State([])
         output_folder = gr.State(str(TMP_DIR))
-        scale_sel = gr.Dropdown(SCALE_NAMES, value="C Major", label="Harmonize Scale")
+        # Harmonization controls removed due to fidelity concerns
 
         # ----- QUEUE MANAGER -----
         with gr.Tab("Queue"):
@@ -1526,8 +1603,6 @@ def ui_full(launch_kwargs):
             with gr.Row():
                 text = gr.Textbox(label="Text Prompt", placeholder="e.g., glossy synthwave with gated drums")
                 melody = gr.Audio(label="Style Excerpt (optional)", type="numpy")
-                btn_hmel = gr.Button("Harmonize")
-                btn_hmel.click(_harm_wrap, [melody, scale_sel], melody)
             with gr.Row():
                 dur = gr.Slider(1, 60, value=10, step=1, label="Duration (s)")
                 eval_q = gr.Slider(1, 6, value=3, step=1, label="Style RVQ")
@@ -1555,12 +1630,8 @@ def ui_full(launch_kwargs):
         with gr.Tab("Section Combiner"):
             with gr.Row():
                 intro_audio = gr.Audio(label="Intro Audio", type="numpy")
-                btn_hi = gr.Button("Harmonize")
-                btn_hi.click(_harm_wrap, [intro_audio, scale_sel], intro_audio)
             with gr.Row():
                 next_audio = gr.Audio(label="Next Audio", type="numpy")
-                btn_hn = gr.Button("Harmonize")
-                btn_hn.click(_harm_wrap, [next_audio, scale_sel], next_audio)
             prompt = gr.Textbox(label="Prompt")
             model_choice = gr.Radio(["AudioGen", "Style"], value="AudioGen", label="Generator")
             with gr.Row():
@@ -1590,8 +1661,6 @@ def ui_full(launch_kwargs):
         with gr.Tab("AudioGen Continuation (GPU0)"):
             with gr.Row():
                 audio_in = gr.Audio(label="Input Clip", type="numpy")
-                btn_hai = gr.Button("Harmonize")
-                btn_hai.click(_harm_wrap, [audio_in, scale_sel], audio_in)
             with gr.Row():
                 prompt = gr.Textbox(label="Prompt (optional)", placeholder="e.g., keep the groove, add arps")
             with gr.Row():
@@ -1605,8 +1674,6 @@ def ui_full(launch_kwargs):
 
             with gr.Row():
                 out_ag = gr.Audio(label="Output", type="filepath")
-                btn_hao = gr.Button("Harmonize")
-                btn_hao.click(_harm_wrap, [out_ag, scale_sel], out_ag)
             btn_ag = gr.Button("Enqueue", variant="primary")
             btn_ag.click(
                 audiogen_continuation,
@@ -1620,24 +1687,14 @@ def ui_full(launch_kwargs):
             if DEMUCS_AVAILABLE:
                 with gr.Row():
                     audio_in2 = gr.Audio(label="Input Track", type="numpy")
-                    btn_hs_in = gr.Button("Harmonize")
-                    btn_hs_in.click(_harm_wrap, [audio_in2, scale_sel], audio_in2)
                 with gr.Row():
                     drums = gr.Audio(label="Drums", type="filepath")
-                    btn_hsd = gr.Button("Harmonize")
-                    btn_hsd.click(_harm_wrap, [drums, scale_sel], drums)
                 with gr.Row():
                     vocals = gr.Audio(label="Vocals", type="filepath")
-                    btn_hsv = gr.Button("Harmonize")
-                    btn_hsv.click(_harm_wrap, [vocals, scale_sel], vocals)
                 with gr.Row():
                     bass = gr.Audio(label="Bass", type="filepath")
-                    btn_hsb = gr.Button("Harmonize")
-                    btn_hsb.click(_harm_wrap, [bass, scale_sel], bass)
                 with gr.Row():
                     other = gr.Audio(label="Other", type="filepath")
-                    btn_hso = gr.Button("Harmonize")
-                    btn_hso.click(_harm_wrap, [other, scale_sel], other)
                 btn_sep = gr.Button("Enqueue", variant="primary")
                 btn_sep.click(separate_stems, inputs=audio_in2, outputs=[drums, vocals, bass, other], queue=True)
             else:
@@ -1649,47 +1706,110 @@ def ui_full(launch_kwargs):
             reverb_amt = gr.Slider(0.0, 1.0, value=0.0, step=0.05, label="Reverb")
             dist_amt = gr.Slider(0.0, 1.0, value=0.0, step=0.05, label="Distortion")
             gate_amt = gr.Slider(0.0, 60.0, value=0.0, step=1.0, label="Gate Threshold (dB)")
+            glitch_amt = gr.Slider(0.0, 1.0, value=0.0, step=0.05, label="Glitch Intensity")
+            rhythm_gate_amt = gr.Slider(0.0, 1.0, value=0.0, step=0.05, label="Rhythmic Gate")
+            scale_sel = gr.Dropdown(SCALE_NAMES, value="C Major", label="Harmonize Scale")
             prompt_name = gr.Textbox(label="Prompt / Name", value="")
 
             def _bpm_wrap(p):
+                if isinstance(p, dict):
+                    p = p.get("name") or p.get("path") or p.get("data")
                 return detect_bpm(p)
 
             with gr.Row():
                 drums_c = gr.Audio(label="Drums", type="filepath")
                 bpm_d = gr.Slider(40, 220, label="Drums BPM")
-                gain_d = gr.Slider(0.0, 2.0, value=1.0, step=0.05, label="Gain")
-                drums_c.change(_bpm_wrap, drums_c, bpm_d)
+                gain_d = gr.Slider(-60.0, 6.0, value=-6.0, step=0.5, label="Gain (dB)")
+                drums_c.upload(_bpm_wrap, drums_c, bpm_d)
+                btn_pd = gr.Button("Preview FX")
                 btn_hd = gr.Button("Harmonize")
+                btn_pd.click(
+                    preview_stem_fx,
+                    [
+                        drums_c,
+                        reverb_amt,
+                        dist_amt,
+                        gate_amt,
+                        glitch_amt,
+                        rhythm_gate_amt,
+                        bpm_d,
+                        gain_d,
+                    ],
+                    drums_c,
+                )
                 btn_hd.click(_harm_wrap, [drums_c, scale_sel], drums_c)
 
             with gr.Row():
                 vocals_c = gr.Audio(label="Vocals", type="filepath")
                 bpm_v = gr.Slider(40, 220, label="Vocals BPM")
-                gain_v = gr.Slider(0.0, 2.0, value=1.0, step=0.05, label="Gain")
-                vocals_c.change(_bpm_wrap, vocals_c, bpm_v)
+                gain_v = gr.Slider(-60.0, 6.0, value=-6.0, step=0.5, label="Gain (dB)")
+                vocals_c.upload(_bpm_wrap, vocals_c, bpm_v)
+                btn_pv = gr.Button("Preview FX")
                 btn_hv = gr.Button("Harmonize")
+                btn_pv.click(
+                    preview_stem_fx,
+                    [
+                        vocals_c,
+                        reverb_amt,
+                        dist_amt,
+                        gate_amt,
+                        glitch_amt,
+                        rhythm_gate_amt,
+                        bpm_v,
+                        gain_v,
+                    ],
+                    vocals_c,
+                )
                 btn_hv.click(_harm_wrap, [vocals_c, scale_sel], vocals_c)
 
             with gr.Row():
                 bass_c = gr.Audio(label="Bass", type="filepath")
                 bpm_b = gr.Slider(40, 220, label="Bass BPM")
-                gain_b = gr.Slider(0.0, 2.0, value=1.0, step=0.05, label="Gain")
-                bass_c.change(_bpm_wrap, bass_c, bpm_b)
+                gain_b = gr.Slider(-60.0, 6.0, value=-6.0, step=0.5, label="Gain (dB)")
+                bass_c.upload(_bpm_wrap, bass_c, bpm_b)
+                btn_pb = gr.Button("Preview FX")
                 btn_hb = gr.Button("Harmonize")
+                btn_pb.click(
+                    preview_stem_fx,
+                    [
+                        bass_c,
+                        reverb_amt,
+                        dist_amt,
+                        gate_amt,
+                        glitch_amt,
+                        rhythm_gate_amt,
+                        bpm_b,
+                        gain_b,
+                    ],
+                    bass_c,
+                )
                 btn_hb.click(_harm_wrap, [bass_c, scale_sel], bass_c)
 
             with gr.Row():
                 other_c = gr.Audio(label="Other", type="filepath")
                 bpm_o = gr.Slider(40, 220, label="Other BPM")
-                gain_o = gr.Slider(0.0, 2.0, value=1.0, step=0.05, label="Gain")
-                other_c.change(_bpm_wrap, other_c, bpm_o)
+                gain_o = gr.Slider(-60.0, 6.0, value=-6.0, step=0.5, label="Gain (dB)")
+                other_c.upload(_bpm_wrap, other_c, bpm_o)
+                btn_po = gr.Button("Preview FX")
                 btn_ho = gr.Button("Harmonize")
+                btn_po.click(
+                    preview_stem_fx,
+                    [
+                        other_c,
+                        reverb_amt,
+                        dist_amt,
+                        gate_amt,
+                        glitch_amt,
+                        rhythm_gate_amt,
+                        bpm_o,
+                        gain_o,
+                    ],
+                    other_c,
+                )
                 btn_ho.click(_harm_wrap, [other_c, scale_sel], other_c)
 
             with gr.Row():
                 out_mix = gr.Audio(label="Output Mix", type="filepath")
-                btn_hm = gr.Button("Harmonize")
-                btn_hm.click(_harm_wrap, [out_mix, scale_sel], out_mix)
             btn_combine = gr.Button("Combine", variant="primary")
             btn_combine.click(
                 combine_stems,
@@ -1698,13 +1818,14 @@ def ui_full(launch_kwargs):
                     vocals_c,
                     bass_c,
                     other_c,
-                    scale_sel,
                     sidechain_amt,
                     output_folder,
                     prompt_name,
                     reverb_amt,
                     dist_amt,
                     gate_amt,
+                    glitch_amt,
+                    rhythm_gate_amt,
                     bpm_d,
                     bpm_v,
                     bpm_b,
@@ -1721,12 +1842,8 @@ def ui_full(launch_kwargs):
         with gr.Tab("Mastering"):
             with gr.Row():
                 audio_in3 = gr.Audio(label="Input Track", type="numpy")
-                btn_hm_in = gr.Button("Harmonize")
-                btn_hm_in.click(_harm_wrap, [audio_in3, scale_sel], audio_in3)
             with gr.Row():
                 ref_master = gr.Audio(label="Reference Track", type="filepath")
-                btn_hm_ref = gr.Button("Harmonize")
-                btn_hm_ref.click(_harm_wrap, [ref_master, scale_sel], ref_master)
             out_trim_master = gr.Slider(-24.0, 0.0, value=-1.0, step=0.5, label="Output Trim (dB)")
             width_master = gr.Slider(0.5, 3.0, value=1.5, step=0.1, label="Stereo Width")
             pan_master = gr.Slider(-1.0, 1.0, value=0.0, step=0.1, label="Stereo Pan")
