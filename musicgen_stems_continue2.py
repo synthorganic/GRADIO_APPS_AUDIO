@@ -51,6 +51,25 @@ try:
 except Exception:
     AUDIOSR_AVAILABLE = False
 
+# Additional optional deps for stem combination / harmonization features
+try:  # librosa for BPM detection + pitch operations
+    import librosa  # type: ignore
+    LIBROSA_AVAILABLE = True
+except Exception:  # pragma: no cover - optional runtime dep
+    LIBROSA_AVAILABLE = False
+
+try:  # pedalboard effects (reverb, distortion, gating)
+    from pedalboard import Pedalboard, Reverb, Distortion, NoiseGate  # type: ignore
+    PEDALBOARD_AVAILABLE = True
+except Exception:  # pragma: no cover - optional runtime dep
+    PEDALBOARD_AVAILABLE = False
+
+try:  # soundfile for harmonize output writing
+    import soundfile as sf  # type: ignore
+    SOUNDFILE_AVAILABLE = True
+except Exception:  # pragma: no cover - optional runtime dep
+    SOUNDFILE_AVAILABLE = False
+
 # ---------- Devices [ALTERED] ----------
 # High‑VRAM GPUs 0 & 1 host the heavy generation models.  Smaller GPUs 2 & 3
 # are reserved for diffusion/utility work so that section composer can always
@@ -97,6 +116,37 @@ TARGET_SR = 32000
 TARGET_AC = 1
 TMP_DIR = Path("/home/archway/music/n-Track")  # writable, persistent
 TMP_DIR.mkdir(parents=True, exist_ok=True)
+
+# Note mapping and available musical scales for harmonization.  Values are
+# sets of semitone numbers (C=0) that are considered in-key.
+NOTE_TO_INT = {
+    "C": 0, "C#": 1, "Db": 1, "D": 2, "D#": 3, "Eb": 3, "E": 4,
+    "F": 5, "F#": 6, "Gb": 6, "G": 7, "G#": 8, "Ab": 8, "A": 9,
+    "A#": 10, "Bb": 10, "B": 11,
+}
+
+def _notes_to_set(notes: str) -> set[int]:
+    return {NOTE_TO_INT[n] for n in notes.split() if n in NOTE_TO_INT}
+
+SCALE_NOTES = {
+    "A Minor": _notes_to_set("A B C D E F G"),
+    "C Minor": _notes_to_set("C D Eb F G Ab Bb"),
+    "D# Minor": _notes_to_set("D# F F# G# A# B C#"),
+    "E Minor": _notes_to_set("E F# G A B C D"),
+    "F Minor": _notes_to_set("F G Ab Bb C Db Eb"),
+    "G Minor": _notes_to_set("G A Bb C D Eb F"),
+    "C Major": _notes_to_set("C D E F G A B"),
+    "D Major": _notes_to_set("D E F# G A B C#"),
+    "F# Minor": _notes_to_set("F# G# A B C# D E"),
+    "G# Minor": _notes_to_set("G# A# B C# D# E F#"),
+    "B Minor": _notes_to_set("B C# D E F# G A"),
+    "D Dorian": _notes_to_set("D E F G A B C"),
+    "E Phrygian": _notes_to_set("E F G A B C D"),
+    "F Lydian": _notes_to_set("F G A B C D E"),
+    "G Mixolydian": _notes_to_set("G A B C D E F"),
+}
+
+SCALE_NAMES = list(SCALE_NOTES.keys())
 
 # ---------- Caches [UNCHANGED] ----------
 STYLE_MODEL = None
@@ -731,6 +781,154 @@ def separate_stems(audio_input):
         str(stem_dir / "other.wav"),
     )
 
+
+# ============================================================================
+# STEM COMBINER + HARMONIZER [NEW]
+# ============================================================================
+
+def _freq_to_midi(freq: float) -> float:
+    return 69 + 12 * math.log2(freq / 440.0)
+
+
+def _midi_to_freq(midi: float) -> float:
+    return 440.0 * (2 ** ((midi - 69) / 12))
+
+
+def _nearest_scale_pitch(freq: float, scale: str) -> float:
+    if freq <= 0:
+        return freq
+    midi = round(_freq_to_midi(freq))
+    allowed = SCALE_NOTES.get(scale, SCALE_NOTES["C Major"])
+    while (midi % 12) not in allowed:
+        midi += 1
+    return _midi_to_freq(midi)
+
+
+def detect_bpm(path: str) -> float:
+    """Return estimated BPM of file using librosa."""
+    if not (LIBROSA_AVAILABLE and path):  # pragma: no cover - optional
+        return 0.0
+    try:
+        y, sr = librosa.load(path, sr=None, mono=True)
+        tempo, _ = librosa.beat.beat_track(y=y, sr=sr)
+        return float(tempo)
+    except Exception:
+        return 0.0
+
+
+def harmonize_file(path: str, scale: str) -> str:
+    """Apply simple harmonization to ``path`` in-place and return new path."""
+    if not (LIBROSA_AVAILABLE and SOUNDFILE_AVAILABLE and path):  # pragma: no cover
+        raise gr.Error("librosa and soundfile are required for harmonize")
+
+    y, sr = librosa.load(path, sr=44100, mono=True)
+    f0 = librosa.yin(y, fmin=50, fmax=1000, frame_length=2048, hop_length=512)
+
+    harmonized = np.zeros_like(y)
+    for i, freq in enumerate(f0):
+        if freq <= 0:
+            continue
+        root = _nearest_scale_pitch(freq, scale)
+        start = i * 512
+        end = min(start + 2048, len(y))
+        t = np.arange(start, end) / sr
+        root_wave = np.sin(2 * np.pi * root * t)
+        harm_waves = []
+        for interval in [4, 7]:  # major 3rd, perfect 5th
+            new_freq = _midi_to_freq(_freq_to_midi(root) + interval)
+            harm_waves.append(np.sin(2 * np.pi * new_freq * t))
+        frame_wave = root_wave + sum(harm_waves)
+        frame_wave /= (1 + len(harm_waves))
+        harmonized[start:end] += frame_wave[: end - start]
+
+    if np.max(np.abs(harmonized)) > 0:
+        harmonized /= np.max(np.abs(harmonized))
+
+    out_path = Path(path).with_suffix("")
+    out_file = TMP_DIR / f"harm_{uuid.uuid4().hex}.wav"
+    sf.write(out_file, harmonized, sr)
+    return str(out_file)
+
+
+def _apply_pedalboard(audio: np.ndarray, sr: int, reverb: float, dist: float, gate: float) -> np.ndarray:
+    if not (PEDALBOARD_AVAILABLE and len(audio)):
+        return audio
+    board = Pedalboard()
+    if reverb > 0:
+        board.append(Reverb(room_size=reverb))
+    if dist > 0:
+        board.append(Distortion(drive=dist))
+    if gate > 0:
+        board.append(NoiseGate(threshold_db=-gate))
+    audio = board(audio, sr)
+    return np.asarray(audio)
+
+
+def combine_stems(
+    drums_path: str | None,
+    vocals_path: str | None,
+    bass_path: str | None,
+    other_path: str | None,
+    scale: str,
+    sidechain: float,
+    out_dir: str,
+    prompt: str,
+    reverb: float,
+    dist: float,
+    gate: float,
+):
+    """Load stems, optionally harmonize/sidechain/effect, then mix."""
+
+    if not SOUNDFILE_AVAILABLE and not LIBROSA_AVAILABLE:
+        raise gr.Error("soundfile or librosa required")
+
+    paths = [drums_path, vocals_path, bass_path, other_path]
+    stems = []
+    sr = 44100
+    for p in paths:
+        if p and Path(p).exists():
+            if LIBROSA_AVAILABLE:
+                y, sr = librosa.load(p, sr=sr, mono=True)
+            elif SOUNDFILE_AVAILABLE:
+                y, sr = sf.read(p)
+                if y.ndim > 1:
+                    y = y.mean(axis=1)
+            else:  # pragma: no cover
+                raise gr.Error("librosa or soundfile required to load audio")
+            stems.append(y)
+        else:
+            stems.append(None)
+
+    max_len = max(len(s) if s is not None else 0 for s in stems)
+    mix = np.zeros(max_len)
+
+    # Basic sidechain: reduce others using drum amplitude envelope
+    drum_env = None
+    if LIBROSA_AVAILABLE and stems[0] is not None and sidechain > 0:
+        env = np.abs(stems[0])
+        env = librosa.util.normalize(env)
+        drum_env = env[:max_len]
+
+    for idx, s in enumerate(stems):
+        if s is None:
+            continue
+        if len(s) < max_len:
+            s = np.pad(s, (0, max_len - len(s)))
+        if idx != 0 and drum_env is not None:
+            s = s * (1 - sidechain * drum_env)
+        mix += s
+
+    mix = _apply_pedalboard(mix, sr, reverb, dist, gate)
+
+    out_dir = Path(out_dir) if out_dir else TMP_DIR
+    out_dir.mkdir(parents=True, exist_ok=True)
+    prefix = (prompt or "output")[:10]
+    orig = Path(drums_path or vocals_path or bass_path or other_path or "mix.wav").name
+    fname = f"{prefix}_combine_{orig}"
+    out_path = out_dir / fname
+    sf.write(out_path, mix, sr)
+    return str(out_path)
+
 def _matchering_match(target: str, reference: str, output: str) -> None:
     """Call Matchering's matching via API fallbacks or CLI.
 
@@ -1100,6 +1298,7 @@ def ui_full(launch_kwargs):
     with gr.Blocks() as demo:
         gr.Markdown("# 🎛️ Music Suite — Style • AudioGen Continuation • Stems  \n*Enqueue buttons; global queue enabled*")
         queue_items = gr.State([])
+        output_folder = gr.State(str(TMP_DIR))
 
         # ----- QUEUE MANAGER -----
         with gr.Tab("Queue"):
@@ -1221,6 +1420,57 @@ def ui_full(launch_kwargs):
             else:
                 gr.Markdown("⚠️ Demucs not installed. `pip install demucs` to enable stems.")
 
+        # ----- COMBINE -----
+        with gr.Tab("Combine Stems"):
+            scale_sel = gr.Dropdown(SCALE_NAMES, value="C Major", label="Harmonize Scale")
+            sidechain_amt = gr.Slider(0.0, 1.0, value=0.0, step=0.05, label="Sidechain Drums → Others")
+            reverb_amt = gr.Slider(0.0, 1.0, value=0.0, step=0.05, label="Reverb")
+            dist_amt = gr.Slider(0.0, 1.0, value=0.0, step=0.05, label="Distortion")
+            gate_amt = gr.Slider(0.0, 60.0, value=0.0, step=1.0, label="Gate Threshold (dB)")
+            prompt_name = gr.Textbox(label="Prompt / Name", value="")
+
+            def _bpm_wrap(p):
+                return detect_bpm(p)
+
+            def _harm_wrap(p, scale):
+                return harmonize_file(p, scale)
+
+            with gr.Row():
+                drums_c = gr.Audio(label="Drums", type="filepath")
+                bpm_d = gr.Slider(40, 220, label="Drums BPM")
+                drums_c.change(_bpm_wrap, drums_c, bpm_d)
+                btn_hd = gr.Button("Harmonize")
+                btn_hd.click(_harm_wrap, [drums_c, scale_sel], drums_c)
+
+            with gr.Row():
+                vocals_c = gr.Audio(label="Vocals", type="filepath")
+                bpm_v = gr.Slider(40, 220, label="Vocals BPM")
+                vocals_c.change(_bpm_wrap, vocals_c, bpm_v)
+                btn_hv = gr.Button("Harmonize")
+                btn_hv.click(_harm_wrap, [vocals_c, scale_sel], vocals_c)
+
+            with gr.Row():
+                bass_c = gr.Audio(label="Bass", type="filepath")
+                bpm_b = gr.Slider(40, 220, label="Bass BPM")
+                bass_c.change(_bpm_wrap, bass_c, bpm_b)
+                btn_hb = gr.Button("Harmonize")
+                btn_hb.click(_harm_wrap, [bass_c, scale_sel], bass_c)
+
+            with gr.Row():
+                other_c = gr.Audio(label="Other", type="filepath")
+                bpm_o = gr.Slider(40, 220, label="Other BPM")
+                other_c.change(_bpm_wrap, other_c, bpm_o)
+                btn_ho = gr.Button("Harmonize")
+                btn_ho.click(_harm_wrap, [other_c, scale_sel], other_c)
+
+            out_mix = gr.Audio(label="Output Mix", type="filepath")
+            btn_combine = gr.Button("Combine", variant="primary")
+            btn_combine.click(
+                combine_stems,
+                inputs=[drums_c, vocals_c, bass_c, other_c, scale_sel, sidechain_amt, output_folder, prompt_name, reverb_amt, dist_amt, gate_amt],
+                outputs=out_mix,
+            )
+
         # ----- MASTERING -----
         with gr.Tab("Mastering"):
             audio_in3 = gr.Audio(label="Input Track", type="numpy")
@@ -1263,6 +1513,11 @@ def ui_full(launch_kwargs):
                 outputs=out_master,
                 queue=True,
             )
+
+        with gr.Accordion("Settings", open=False):
+            out_box = gr.Textbox(value=str(TMP_DIR), label="Output Folder")
+            set_btn = gr.Button("Set")
+            set_btn.click(lambda x: x, inputs=out_box, outputs=output_folder)
 
         # Global queue
         demo.queue(concurrency_count=1, max_size=32).launch(**launch_kwargs)
