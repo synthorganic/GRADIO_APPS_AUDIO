@@ -16,6 +16,7 @@ from pathlib import Path
 import subprocess as sp
 import sys
 import shutil
+import numpy as np
 
 import torch
 import torch.nn.functional as F
@@ -38,6 +39,10 @@ try:
 except ImportError:
     mg = None  # ensure symbol exists for type checkers and wrappers
     MATCHERING_AVAILABLE = False
+
+# numpy 1.24+ removed aliases like ``np.float`` that older libs still use
+if not hasattr(np, "float"):
+    np.float = float  # type: ignore[attr-defined]
 
 try:
     sys.path.append(str(Path(__file__).resolve().parent / "versatile_audio_super_resolution"))
