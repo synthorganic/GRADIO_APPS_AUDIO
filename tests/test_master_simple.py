@@ -91,7 +91,7 @@ def test_apply_bass_narrow_builds_filter(monkeypatch, tmp_path):
     af_arg = cmds[0][cmds[0].index("-af") + 1]
     assert "lowpass" in af_arg
     assert "(1-" not in af_arg
-    assert "c0=c0*0.000000+0.500000*(c0+c1)" in af_arg
+    assert "c0=0.5*(c0+c1)|c1=0.5*(c0+c1)" in af_arg
 
 
 def test_apply_frequency_cuts_uses_equalizer(monkeypatch, tmp_path):
@@ -128,16 +128,21 @@ def test_master_simple_uses_default_reference(monkeypatch, tmp_path):
     assert Path(out).exists()
 
 
-def test_audiosr_loads_on_configured_device(monkeypatch):
-    called = {}
+def test_audiosr_round_robin_devices(monkeypatch):
+    calls = []
 
-    def fake_build_model(device):  # captures device string
-        called["device"] = device
+    def fake_build_model(device):  # capture device selection
+        calls.append(device)
         return object()
 
     monkeypatch.setattr(msc2, "AUDIOSR_AVAILABLE", True)
     monkeypatch.setattr(msc2, "audiosr_build_model", fake_build_model, raising=False)
-    msc2.AUDIOSR_MODEL = None
+    # Simulate two GPU devices for AudioSR and reset caches/index.
+    msc2.AUDIOSR_DEVICES = ["cuda:0", "cuda:1"]
+    msc2.AUDIOSR_MODELS = {}
+    msc2._AUDIOSR_NEXT_DEVICE = 0
 
-    msc2.audiosr_load_model()
-    assert called["device"] == str(msc2.AUDIOSR_DEVICE)
+    msc2.audiosr_load_model()  # first call -> cuda:0
+    msc2.audiosr_load_model()  # second call -> cuda:1
+
+    assert calls == ["cuda:0", "cuda:1"]

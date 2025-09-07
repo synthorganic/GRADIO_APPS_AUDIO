@@ -68,17 +68,23 @@ UTILITY_DEVICE = (
     if torch.cuda.is_available() and torch.cuda.device_count() > 3
     else DIFFUSION_DEVICE
 )
-AUDIOSR_DEVICE = (
-    torch.device("cuda:0")
+# ``AudioSR`` is lightweight enough to duplicate across two GPUs. Keep a list
+# of devices to round‑robin requests between them so that long upscales don't
+# monopolise a single card.  When only one GPU is available we fall back to the
+# utility device.
+AUDIOSR_DEVICES = (
+    [torch.device("cuda:0"), torch.device("cuda:1")]
     if torch.cuda.is_available() and torch.cuda.device_count() > 1
-    else UTILITY_DEVICE
+    else [UTILITY_DEVICE]
 )
+# First device retained for backward compatibility / logging.
+AUDIOSR_DEVICE = AUDIOSR_DEVICES[0]
 
 print(
     f"[Boot] STYLE: {STYLE_DEVICE} | MEDIUM: {MEDIUM_DEVICE} | "
     f"LARGE: {LARGE_DEVICE} | AUDIOGEN: {AUDIOGEN_DEVICE} | "
     f"DIFFUSION(MBD): {DIFFUSION_DEVICE} | UTILITY: {UTILITY_DEVICE} | "
-    f"AUDIOSR: {AUDIOSR_DEVICE}"
+    f"AUDIOSR: {AUDIOSR_DEVICES}"
 )
 
 # ---------- Constants & paths [ALTERED] ----------
@@ -94,7 +100,10 @@ STYLE_USE_DIFFUSION = False
 AUDIOGEN_MODEL = None
 MEDIUM_MODEL = None
 LARGE_MODEL = None
-AUDIOSR_MODEL = None
+# Cache one ``AudioSR`` model per device and keep an index for load balancing
+# across ``AUDIOSR_DEVICES``.
+AUDIOSR_MODELS = {}
+_AUDIOSR_NEXT_DEVICE = 0
 
 # ---------- FFmpeg noise control (for future waveform use) [UNCHANGED] ----------
 _old_call = sp.call
@@ -890,14 +899,14 @@ def _apply_bass_narrow(in_path: Path, out_path: Path, sr: int, width: float) -> 
         shutil.copyfile(in_path, out_path)
         return
     w = max(0.0, min(1.0, width))
-    mono_mix = 0.5 * (1.0 - w)
-    pan_expr = (
-        f"c0=c0*{w:.6f}+{mono_mix:.6f}*(c0+c1)|"
-        f"c1=c1*{w:.6f}+{mono_mix:.6f}*(c0+c1)"
-    pan_expr = (
-        f"c0=c0*{w}+0.5*(1-{w})*(c0+c1)|"
-        f"c1=c1*{w}+0.5*(1-{w})*(c0+c1)"
-    )
+    if w <= 1e-6:
+        pan_expr = "c0=0.5*(c0+c1)|c1=0.5*(c0+c1)"
+    else:
+        mono_mix = 0.5 * (1.0 - w)
+        pan_expr = (
+            f"c0=c0*{w:.6f}+{mono_mix:.6f}*(c0+c1)|"
+            f"c1=c1*{w:.6f}+{mono_mix:.6f}*(c0+c1)"
+        )
     filter_expr = (
         f"asplit=2[low][high];"
         f"[low]lowpass=f=150,pan=stereo|{pan_expr}[l];"
@@ -988,14 +997,29 @@ def _master_simple(
     return str(final_path)
 
 
-def audiosr_load_model():
-    """Load and cache the AudioSR model on the dedicated AudioSR device."""
-    global AUDIOSR_MODEL
-    if AUDIOSR_MODEL is None:
-        if not AUDIOSR_AVAILABLE:
-            raise gr.Error("AudioSR not installed. Add the 'versatile_audio_super_resolution' directory.")
-        AUDIOSR_MODEL = audiosr_build_model(device=str(AUDIOSR_DEVICE))
-    return AUDIOSR_MODEL
+def audiosr_load_model(device=None):
+    """Load and cache an ``AudioSR`` model on ``device``.
+
+    When no ``device`` is specified, models are distributed across
+    ``AUDIOSR_DEVICES`` in a round‑robin fashion so that multiple upscales can
+    run concurrently on separate GPUs.
+    """
+    global AUDIOSR_MODELS, _AUDIOSR_NEXT_DEVICE
+
+    if not AUDIOSR_AVAILABLE:
+        raise gr.Error(
+            "AudioSR not installed. Add the 'versatile_audio_super_resolution' directory."
+        )
+
+    if device is None:
+        device = AUDIOSR_DEVICES[_AUDIOSR_NEXT_DEVICE]
+        _AUDIOSR_NEXT_DEVICE = (_AUDIOSR_NEXT_DEVICE + 1) % len(AUDIOSR_DEVICES)
+
+    model = AUDIOSR_MODELS.get(device)
+    if model is None:
+        AUDIOSR_MODELS[device] = audiosr_build_model(device=str(device))
+        model = AUDIOSR_MODELS[device]
+    return model
 
 
 def _audiosr_process(audio_input):
