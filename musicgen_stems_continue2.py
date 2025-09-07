@@ -1507,6 +1507,60 @@ def preview_stem_fx(
     sf.write(out_path, y, sr)
     return str(out_path)
 
+
+def _preview_wrap(
+    audio_path: str | None,
+    fx_list: list[str] | None,
+    bpm: float,
+    gain: float,
+    reverb: float,
+    dist: float,
+    gate: float,
+    glitch: float,
+    rg_freq: str,
+    rg_dur: float,
+    rg_loc: str,
+    rg_pattern: str,
+    loop_measures: float,
+):
+    """Wrapper around :func:`preview_stem_fx` that respects ``fx_list``.
+
+    Returns the preview filepath alongside the original path so callers can
+    revert the operation.
+    """
+
+    fx_set = set(fx_list or [])
+    out = preview_stem_fx(
+        audio_path,
+        reverb if "Reverb" in fx_set else 0.0,
+        dist if "Distortion" in fx_set else 0.0,
+        gate if "Gate" in fx_set else 0.0,
+        glitch if "Glitch" in fx_set else 0.0,
+        rg_freq,
+        rg_dur if "Rhythmic Gate" in fx_set else 0.0,
+        rg_loc,
+        rg_pattern,
+        loop_measures if "Looper" in fx_set else 0.0,
+        bpm,
+        gain,
+    )
+    return out, audio_path
+
+
+def _harmonize_wrap(path: str | None, scale: str) -> tuple[str | None, str | None]:
+    """Harmonize ``path`` and return the new/old paths for undo."""
+
+    if not path:
+        return None, None
+    out = _harm_wrap(path, scale)
+    return out if isinstance(out, str) else path, path
+
+
+def _revert_wrap(prev: str | None, current: str | None) -> tuple[str | None, None]:
+    """Return ``prev`` if available, otherwise ``current``."""
+
+    return (prev or current), None
+
 def _matchering_match(target: str, reference: str, output: str) -> None:
     """Call Matchering's matching via API fallbacks or CLI.
 
@@ -2060,6 +2114,7 @@ def ui_full(launch_kwargs):
         # ----- COMBINE -----
         with gr.Tab("Combine Stems"):
             prompt_name = gr.Textbox(label="Prompt / Name", value="")
+            harm_scale = gr.Dropdown(SCALE_NAMES, value="C Major", label="Harmonize Scale")
             with gr.Row():
                 with gr.Column():
                     drums_c = gr.Audio(label="Drums", type="filepath")
@@ -2074,6 +2129,11 @@ def ui_full(launch_kwargs):
                         ["Reverb", "Distortion", "Gate", "Glitch", "Rhythmic Gate", "Looper"],
                         label="FX",
                     )
+                    drums_prev = gr.State()
+                    with gr.Row():
+                        btn_prev_d = gr.Button("Render/Preview Effects")
+                        btn_harm_d = gr.Button("Harmonize")
+                        btn_rev_d = gr.Button("Revert Effects")
                 with gr.Column():
                     vocals_c = gr.Audio(label="Vocals", type="filepath")
                     vocals_vis = gr.Plot(label="Vocals Visual")
@@ -2087,6 +2147,11 @@ def ui_full(launch_kwargs):
                         ["Reverb", "Distortion", "Gate", "Glitch", "Rhythmic Gate", "Looper"],
                         label="FX",
                     )
+                    vocals_prev = gr.State()
+                    with gr.Row():
+                        btn_prev_v = gr.Button("Render/Preview Effects")
+                        btn_harm_v = gr.Button("Harmonize")
+                        btn_rev_v = gr.Button("Revert Effects")
                 with gr.Column():
                     bass_c = gr.Audio(label="Bass", type="filepath")
                     bass_vis = gr.Plot(label="Bass Visual")
@@ -2100,6 +2165,11 @@ def ui_full(launch_kwargs):
                         ["Reverb", "Distortion", "Gate", "Glitch", "Rhythmic Gate", "Looper"],
                         label="FX",
                     )
+                    bass_prev = gr.State()
+                    with gr.Row():
+                        btn_prev_b = gr.Button("Render/Preview Effects")
+                        btn_harm_b = gr.Button("Harmonize")
+                        btn_rev_b = gr.Button("Revert Effects")
                 with gr.Column():
                     other_c = gr.Audio(label="Other", type="filepath")
                     other_vis = gr.Plot(label="Other Visual")
@@ -2113,6 +2183,11 @@ def ui_full(launch_kwargs):
                         ["Reverb", "Distortion", "Gate", "Glitch", "Rhythmic Gate", "Looper"],
                         label="FX",
                     )
+                    other_prev = gr.State()
+                    with gr.Row():
+                        btn_prev_o = gr.Button("Render/Preview Effects")
+                        btn_harm_o = gr.Button("Harmonize")
+                        btn_rev_o = gr.Button("Revert Effects")
             with gr.Accordion("Effect Settings", open=False):
                 reverb_amt = gr.Slider(0.0, 1.0, value=0.0, step=0.05, label="Reverb")
                 dist_amt = gr.Slider(0.0, 1.0, value=0.0, step=0.05, label="Distortion")
@@ -2133,6 +2208,122 @@ def ui_full(launch_kwargs):
                     label="Gate Pattern",
                 )
                 loop_dur = gr.Slider(1, 64, value=4, step=1, label="Loop Duration (measures)")
+            btn_prev_d.click(
+                _preview_wrap,
+                inputs=[
+                    drums_c,
+                    drums_fx,
+                    bpm_d,
+                    gain_d,
+                    reverb_amt,
+                    dist_amt,
+                    gate_amt,
+                    glitch_amt,
+                    rg_freq,
+                    rg_dur,
+                    rg_loc,
+                    rg_pattern,
+                    loop_dur,
+                ],
+                outputs=[drums_c, drums_prev],
+            )
+            btn_harm_d.click(
+                _harmonize_wrap,
+                inputs=[drums_c, harm_scale],
+                outputs=[drums_c, drums_prev],
+            )
+            btn_rev_d.click(
+                _revert_wrap,
+                inputs=[drums_prev, drums_c],
+                outputs=[drums_c, drums_prev],
+            )
+            btn_prev_v.click(
+                _preview_wrap,
+                inputs=[
+                    vocals_c,
+                    vocals_fx,
+                    bpm_v,
+                    gain_v,
+                    reverb_amt,
+                    dist_amt,
+                    gate_amt,
+                    glitch_amt,
+                    rg_freq,
+                    rg_dur,
+                    rg_loc,
+                    rg_pattern,
+                    loop_dur,
+                ],
+                outputs=[vocals_c, vocals_prev],
+            )
+            btn_harm_v.click(
+                _harmonize_wrap,
+                inputs=[vocals_c, harm_scale],
+                outputs=[vocals_c, vocals_prev],
+            )
+            btn_rev_v.click(
+                _revert_wrap,
+                inputs=[vocals_prev, vocals_c],
+                outputs=[vocals_c, vocals_prev],
+            )
+            btn_prev_b.click(
+                _preview_wrap,
+                inputs=[
+                    bass_c,
+                    bass_fx,
+                    bpm_b,
+                    gain_b,
+                    reverb_amt,
+                    dist_amt,
+                    gate_amt,
+                    glitch_amt,
+                    rg_freq,
+                    rg_dur,
+                    rg_loc,
+                    rg_pattern,
+                    loop_dur,
+                ],
+                outputs=[bass_c, bass_prev],
+            )
+            btn_harm_b.click(
+                _harmonize_wrap,
+                inputs=[bass_c, harm_scale],
+                outputs=[bass_c, bass_prev],
+            )
+            btn_rev_b.click(
+                _revert_wrap,
+                inputs=[bass_prev, bass_c],
+                outputs=[bass_c, bass_prev],
+            )
+            btn_prev_o.click(
+                _preview_wrap,
+                inputs=[
+                    other_c,
+                    other_fx,
+                    bpm_o,
+                    gain_o,
+                    reverb_amt,
+                    dist_amt,
+                    gate_amt,
+                    glitch_amt,
+                    rg_freq,
+                    rg_dur,
+                    rg_loc,
+                    rg_pattern,
+                    loop_dur,
+                ],
+                outputs=[other_c, other_prev],
+            )
+            btn_harm_o.click(
+                _harmonize_wrap,
+                inputs=[other_c, harm_scale],
+                outputs=[other_c, other_prev],
+            )
+            btn_rev_o.click(
+                _revert_wrap,
+                inputs=[other_prev, other_c],
+                outputs=[other_c, other_prev],
+            )
             out_mix = gr.Audio(label="Output Mix", type="filepath")
             btn_combine = gr.Button("Combine", variant="primary")
             btn_combine.click(
