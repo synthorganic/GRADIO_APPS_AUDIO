@@ -935,14 +935,16 @@ def harmonize_file(path: str, scale: str) -> str:
     if not (LIBROSA_AVAILABLE and SOUNDFILE_AVAILABLE and path):  # pragma: no cover
         raise gr.Error("librosa and soundfile are required for harmonize")
 
-    y, sr = librosa.load(path, sr=44100, mono=True)
+    y, sr = librosa.load(path, sr=44100, mono=False)
+    if y.ndim == 1:
+        y = y[np.newaxis, :]
     hop = 512
     frame = 2048
-    f0 = librosa.yin(y, fmin=50, fmax=1000, frame_length=frame, hop_length=hop)
+    f0 = librosa.yin(y.mean(axis=0), fmin=50, fmax=1000, frame_length=frame, hop_length=hop)
 
     window = np.hanning(frame)
     harmonized = np.zeros_like(y)
-    weight = np.zeros_like(y)
+    weight = np.zeros(y.shape[1])
 
     mid = None
     track = None
@@ -958,10 +960,10 @@ def harmonize_file(path: str, scale: str) -> str:
 
     for i, freq in enumerate(f0):
         start = i * hop
-        end = min(start + frame, len(y))
-        segment = y[start:end]
+        end = min(start + frame, y.shape[1])
+        segment = y[:, start:end]
         if freq <= 0 or end - start <= 0:
-            harmonized[start:end] += segment * window[: end - start]
+            harmonized[:, start:end] += segment * window[: end - start]
             weight[start:end] += window[: end - start]
             if MIDO_AVAILABLE and last_note is not None:
                 track.append(mido.Message("note_off", note=last_note, time=dur_ticks))
@@ -971,14 +973,14 @@ def harmonize_file(path: str, scale: str) -> str:
 
         target = _ftha_align(freq, scale)
         shift = 12 * math.log2(target / freq)
-        shifted = librosa.effects.pitch_shift(segment, sr, shift)
-        if np.max(np.abs(shifted)) > 0:
-            rms_orig = np.sqrt(np.mean(segment**2) + 1e-9)
-            rms_new = np.sqrt(np.mean(shifted**2) + 1e-9)
-            shifted *= rms_orig / rms_new
-
-        length = min(len(shifted), len(window))
-        harmonized[start:start + length] += shifted[:length] * window[:length]
+        for ch in range(y.shape[0]):
+            shifted = librosa.effects.pitch_shift(segment[ch], sr, shift)
+            if np.max(np.abs(shifted)) > 0:
+                rms_orig = np.sqrt(np.mean(segment[ch]**2) + 1e-9)
+                rms_new = np.sqrt(np.mean(shifted**2) + 1e-9)
+                shifted *= rms_orig / rms_new
+            length = min(len(shifted), len(window))
+            harmonized[ch, start:start + length] += shifted[:length] * window[:length]
         weight[start:start + length] += window[:length]
 
         if MIDO_AVAILABLE:
@@ -995,12 +997,17 @@ def harmonize_file(path: str, scale: str) -> str:
     if MIDO_AVAILABLE and last_note is not None:
         track.append(mido.Message("note_off", note=last_note, time=dur_ticks))
 
-    harmonized = np.divide(harmonized, weight, out=np.zeros_like(harmonized), where=weight > 0)
+    harmonized = np.divide(
+        harmonized,
+        weight[np.newaxis, :],
+        out=np.zeros_like(harmonized),
+        where=weight[np.newaxis, :] > 0,
+    )
     if np.max(np.abs(harmonized)) > 0:
         harmonized /= np.max(np.abs(harmonized))
 
     out_file = TMP_DIR / f"harm_{uuid.uuid4().hex}.wav"
-    sf.write(out_file, harmonized, sr)
+    sf.write(out_file, harmonized.T, sr)
 
     if MIDO_AVAILABLE:
         out_midi = TMP_DIR / f"harm_{uuid.uuid4().hex}.mid"
@@ -1019,11 +1026,10 @@ def _harm_wrap(audio, scale: str):
         sf.write(tmp, y, sr)
         out_path = harmonize_file(str(tmp), scale)
         if LIBROSA_AVAILABLE:
-            y2, sr2 = librosa.load(out_path, sr=sr)
+            y2, sr2 = librosa.load(out_path, sr=sr, mono=False)
+            y2 = y2.T if y2.ndim > 1 else y2
         else:
             y2, sr2 = sf.read(out_path)
-            if y2.ndim > 1:
-                y2 = y2.mean(axis=1)
         return (sr2, y2)
     return audio
 
