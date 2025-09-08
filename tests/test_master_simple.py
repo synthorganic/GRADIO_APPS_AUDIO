@@ -107,8 +107,8 @@ def test_apply_frequency_cuts_uses_equalizer(monkeypatch, tmp_path):
 
 
 def test_master_simple_uses_default_reference(monkeypatch, tmp_path):
-    ref_dir = Path("/references")
-    ref_dir.mkdir(exist_ok=True)
+    ref_dir = Path(__file__).resolve().parent.parent / "references"
+    ref_dir.mkdir(parents=True, exist_ok=True)
     ref_file = ref_dir / "reference.wav"
     ref_file.touch()
 

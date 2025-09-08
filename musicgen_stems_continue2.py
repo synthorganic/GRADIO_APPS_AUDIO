@@ -197,14 +197,25 @@ else:  # pragma: no cover - font file missing
     logging.warning("Font file not found: %s", FONT_PATH)
 
 # Global font / theme overrides
-CUSTOM_CSS = """
-@import url('https://fonts.cdnfonts.com/css/nasalization');
-body, .gradio-container {
-    font-family: 'Nasalization', sans-serif;
+FONT_PATH = Path(__file__).resolve().parent / "saved_by_zero" / "Saved by Zero Rg.otf"
+try:
+    import base64
+
+    FONT_BASE64 = base64.b64encode(FONT_PATH.read_bytes()).decode("ascii")
+except Exception:  # pragma: no cover - fallback if font missing
+    FONT_BASE64 = ""
+
+CUSTOM_CSS = f"""
+@font-face {{
+    font-family: 'SAVED_BY_ZERO';
+    src: url(data:font/otf;base64,{FONT_BASE64}) format('opentype');
+}}
+body, .gradio-container {{
+    font-family: 'SAVED_BY_ZERO', sans-serif;
     color: #E8E8E8;
     background-color: #475043;
-}
-:root {
+}}
+:root {{
     --primary-hue: 150;
     --color-primary: #434750;
     --color-secondary: #475043;
@@ -212,7 +223,7 @@ body, .gradio-container {
     --color-background-primary: #475043;
     --color-background-secondary: #434750;
     --color-background-tertiary: #434750;
-}
+}}
 """
 
 
@@ -240,12 +251,18 @@ def save_settings(cfg: dict) -> None:
 
 USER_SETTINGS = load_settings()
 
-# Persisted model/sharding configuration pulled from settings
-CUSTOM_SHARD_RAW = USER_SETTINGS.get("shard_devices", "")
+# Persisted model/sharding configuration pulled from settings.  The shard
+# string uses a semicolon separated list of GPU indices like ``"0;1"`` to
+# represent the pair of devices assigned to heavy models.
+CUSTOM_SHARD_RAW = USER_SETTINGS.get("shard_devices", "0;1")
 CUSTOM_SHARD_DEVICES = [
-    torch.device(d.strip()) for d in CUSTOM_SHARD_RAW.split(",") if d.strip()
+    torch.device(f"cuda:{d.strip()}") for d in CUSTOM_SHARD_RAW.split(";") if d.strip()
 ]
-MODEL_OPTIONS = USER_SETTINGS.get("model_options", ["Style", "AudioGen"])
+MODEL_OPTIONS = USER_SETTINGS.get("model_options", ["Style", "AudioGen", "AudioSR"])
+
+if "AUDIOSR_DEVICES" not in os.environ:
+    AUDIOSR_DEVICES = CUSTOM_SHARD_DEVICES or AUDIOSR_DEVICES
+    AUDIOSR_DEVICE = AUDIOSR_DEVICES[0]
 
 # Note mapping and available musical scales for harmonization.  Values are
 # sets of semitone numbers (C=0) that are considered in-key.
@@ -2071,7 +2088,7 @@ def _master_simple(
     if reference_audio:
         ref = Path(reference_audio)
     else:
-        ref = Path("/references/reference.wav")
+        ref = Path(__file__).resolve().parent / "references" / "reference.wav"
     if not ref.exists():
         raise gr.Error(f"Reference file missing: {ref}")
     matched_path = TMP_DIR / f"mastered_simple_{uuid.uuid4().hex}.wav"
@@ -2694,13 +2711,13 @@ def ui_full(launch_kwargs):
             set_btn = gr.Button("Set")
             set_btn.click(lambda x: x, inputs=out_box, outputs=output_folder)
 
-            shard_box = gr.Textbox(
+            shard_box = gr.Dropdown(
                 value=CUSTOM_SHARD_RAW,
-                label="Custom Shard Devices",
-                placeholder="cuda:0,cuda:1",
+                choices=["0;1", "2;3"],
+                label="Shard Devices",
             )
             model_opts = gr.CheckboxGroup(
-                ["Style", "Medium", "Large", "AudioGen"],
+                ["Style", "Medium", "Large", "AudioGen", "AudioSR"],
                 value=MODEL_OPTIONS,
                 label="Models",
             )
@@ -2709,11 +2726,13 @@ def ui_full(launch_kwargs):
             save_status = gr.Markdown("", elem_id="save_status")
 
             def _save_settings(shard_str, models, *gains):
-                global CUSTOM_SHARD_RAW, CUSTOM_SHARD_DEVICES, MODEL_OPTIONS
+                global CUSTOM_SHARD_RAW, CUSTOM_SHARD_DEVICES, MODEL_OPTIONS, AUDIOSR_DEVICES, AUDIOSR_DEVICE
                 CUSTOM_SHARD_RAW = shard_str
                 CUSTOM_SHARD_DEVICES = [
-                    torch.device(d.strip()) for d in shard_str.split(",") if d.strip()
+                    torch.device(f"cuda:{d.strip()}") for d in shard_str.split(";") if d.strip()
                 ]
+                AUDIOSR_DEVICES = CUSTOM_SHARD_DEVICES or [UTILITY_DEVICE]
+                AUDIOSR_DEVICE = AUDIOSR_DEVICES[0]
                 MODEL_OPTIONS = models
                 cfg = {
                     "eq_gains": list(gains),
