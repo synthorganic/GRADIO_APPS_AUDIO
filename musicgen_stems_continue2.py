@@ -197,14 +197,17 @@ else:  # pragma: no cover - font file missing
     logging.warning("Font file not found: %s", FONT_PATH)
 
 # Global font / theme overrides
-CUSTOM_CSS = """
-@import url('https://fonts.cdnfonts.com/css/nasalization');
-body, .gradio-container {
+CUSTOM_CSS = f"""
+@font-face {{
+    font-family: 'Nasalization';
+    src: url(data:font/ttf;base64,{FONT_BASE64}) format('truetype');
+}}
+body, .gradio-container {{
     font-family: 'Nasalization', sans-serif;
     color: #E8E8E8;
     background-color: #475043;
-}
-:root {
+}}
+:root {{
     --primary-hue: 150;
     --color-primary: #434750;
     --color-secondary: #475043;
@@ -212,7 +215,7 @@ body, .gradio-container {
     --color-background-primary: #475043;
     --color-background-secondary: #434750;
     --color-background-tertiary: #434750;
-}
+}}
 """
 
 
@@ -1432,8 +1435,18 @@ def _merge_signals(signals: list[np.ndarray]) -> np.ndarray:
 
 def _multiband_compress(signal: np.ndarray, sr: int) -> np.ndarray:
     """Apply a simple multiband compressor with fixed parameters."""
-    if not (SCIPY_AVAILABLE and len(signal)):
+    if not len(signal):
         return signal
+    if not SCIPY_AVAILABLE:
+        # Fallback: apply a naive static compressor without filtering.
+        threshold = 0.1
+        ratio = 4.0
+        out = signal.copy()
+        over = np.abs(out) > threshold
+        out[over] = np.sign(out[over]) * (
+            threshold + (np.abs(out[over]) - threshold) / ratio
+        )
+        return out
     cross = np.array([400, 1000, 6000])
     thresholds = np.array([0.1, 0.2, 0.18, 0.05])
     ratios = np.array([2, 2, 2, 3])
@@ -2699,10 +2712,11 @@ def ui_full(launch_kwargs):
                 label="Custom Shard Devices",
                 placeholder="cuda:0,cuda:1",
             )
-            model_opts = gr.CheckboxGroup(
+            model_opts = gr.Dropdown(
                 ["Style", "Medium", "Large", "AudioGen"],
                 value=MODEL_OPTIONS,
                 label="Models",
+                multiselect=True,
             )
 
             save_btn = gr.Button("Save Settings")
