@@ -1354,6 +1354,55 @@ def _apply_pedalboard(audio: np.ndarray, sr: int, reverb: float, dist: float, ga
     return np.asarray(audio)
 
 
+def _multiband_compress(
+    audio: np.ndarray,
+    sr: int,
+    threshold_db: float = -24.0,
+    ratio: float = 4.0,
+    crossover_low: float = 200.0,
+    crossover_high: float = 2000.0,
+) -> np.ndarray:
+    """Simple three-band compressor.
+
+    The implementation follows the approach described in
+    ``MBcomp.ipynb`` from Sm3r/MultibandCompressor.  The audio is split into
+    low/mid/high bands using Butterworth filters and each band is compressed
+    independently before being summed back together.
+
+    If ``scipy`` is not available the function acts as a no-op so the rest of
+    the application can still run without the optional dependency.
+    """
+
+    if not len(audio):
+        return audio
+    try:  # pragma: no cover - optional runtime dependency
+        from scipy.signal import butter, lfilter
+    except Exception:
+        return audio
+
+    nyq = sr / 2.0
+    low_b, low_a = butter(4, crossover_low / nyq, btype="low")
+    mid_b, mid_a = butter(4, [crossover_low / nyq, crossover_high / nyq], btype="band")
+    high_b, high_a = butter(4, crossover_high / nyq, btype="high")
+
+    low = lfilter(low_b, low_a, audio)
+    mid = lfilter(mid_b, mid_a, audio)
+    high = lfilter(high_b, high_a, audio)
+
+    thresh = 10 ** (threshold_db / 20.0)
+
+    def _compress_band(band: np.ndarray) -> np.ndarray:
+        env = np.abs(band)
+        gain = np.ones_like(env)
+        over = env > thresh
+        if np.any(over):
+            gain[over] = (thresh + (env[over] - thresh) / ratio) / env[over]
+        return band * gain
+
+    out = _compress_band(low) + _compress_band(mid) + _compress_band(high)
+    return out.astype(audio.dtype, copy=False)
+
+
 def _rhythmic_gate(
     audio: np.ndarray,
     sr: int,
@@ -1445,13 +1494,16 @@ def _apply_stem_fx(
     rhythm_gate: dict | None,
     bpm: float,
     loop_measures: float,
+    multiband_comp: bool,
 ) -> np.ndarray:
-    """Apply optional looper, glitch, rhythmic gate, and pedalboard effects."""
+    """Apply optional looper, glitch, rhythmic gate, pedalboard and compression."""
     audio = _looper(audio, sr, bpm, loop_measures)
     audio = _glitch_audio(audio, sr, glitch)
     if rhythm_gate:
         audio = _rhythmic_gate(audio, sr, bpm, **rhythm_gate)
     audio = _apply_pedalboard(audio, sr, reverb, dist, gate)
+    if multiband_comp:
+        audio = _multiband_compress(audio, sr)
     return audio
 
 
@@ -1534,6 +1586,7 @@ def combine_stems(
                 rg_cfg,
                 bpm,
                 loop_measures if "Looper" in fx_set else 0.0,
+                "Multiband Compressor" in fx_set,
             )
             y = y * _db_to_amp(g_db)
             stems.append(y)
@@ -1572,6 +1625,7 @@ def preview_stem_fx(
     loop_measures: float,
     bpm: float,
     gain: float,
+    multiband_comp: bool,
 ):
     """Load a stem, apply effects, and return a preview filepath."""
     if not audio_path or not Path(audio_path).exists():
@@ -1594,7 +1648,18 @@ def preview_stem_fx(
         "loc": rhythm_gate_loc,
         "pattern": rhythm_gate_pattern,
     }
-    y = _apply_stem_fx(y, sr, reverb, dist, gate, glitch, rg_cfg, bpm, loop_measures)
+    y = _apply_stem_fx(
+        y,
+        sr,
+        reverb,
+        dist,
+        gate,
+        glitch,
+        rg_cfg,
+        bpm,
+        loop_measures,
+        multiband_comp,
+    )
     y = y * _db_to_amp(gain)
     out_path = TMP_DIR / f"preview_{uuid.uuid4().hex}.wav"
     sf.write(out_path, y, sr)
@@ -1636,6 +1701,7 @@ def _preview_wrap(
         loop_measures if "Looper" in fx_set else 0.0,
         bpm,
         gain,
+        "Multiband Compressor" in fx_set,
     )
     return out, audio_path
 
@@ -2247,7 +2313,15 @@ def ui_full(launch_kwargs):
                     btn_detect_d = gr.Button("Detect Scale+BPM")
                     btn_detect_d.click(_scale_bpm_wrap_slider, drums_c, [scale_d, bpm_d])
                     drums_fx = gr.CheckboxGroup(
-                        ["Reverb", "Distortion", "Gate", "Glitch", "Rhythmic Gate", "Looper"],
+                        [
+                            "Reverb",
+                            "Distortion",
+                            "Gate",
+                            "Glitch",
+                            "Rhythmic Gate",
+                            "Looper",
+                            "Multiband Compressor",
+                        ],
                         label="FX",
                     )
                     drums_prev = gr.State()
@@ -2267,7 +2341,15 @@ def ui_full(launch_kwargs):
                     btn_detect_v = gr.Button("Detect Scale+BPM")
                     btn_detect_v.click(_scale_bpm_wrap_slider, vocals_c, [scale_v, bpm_v])
                     vocals_fx = gr.CheckboxGroup(
-                        ["Reverb", "Distortion", "Gate", "Glitch", "Rhythmic Gate", "Looper"],
+                        [
+                            "Reverb",
+                            "Distortion",
+                            "Gate",
+                            "Glitch",
+                            "Rhythmic Gate",
+                            "Looper",
+                            "Multiband Compressor",
+                        ],
                         label="FX",
                     )
                     vocals_prev = gr.State()
@@ -2287,7 +2369,15 @@ def ui_full(launch_kwargs):
                     btn_detect_b = gr.Button("Detect Scale+BPM")
                     btn_detect_b.click(_scale_bpm_wrap_slider, bass_c, [scale_b, bpm_b])
                     bass_fx = gr.CheckboxGroup(
-                        ["Reverb", "Distortion", "Gate", "Glitch", "Rhythmic Gate", "Looper"],
+                        [
+                            "Reverb",
+                            "Distortion",
+                            "Gate",
+                            "Glitch",
+                            "Rhythmic Gate",
+                            "Looper",
+                            "Multiband Compressor",
+                        ],
                         label="FX",
                     )
                     bass_prev = gr.State()
@@ -2307,7 +2397,15 @@ def ui_full(launch_kwargs):
                     btn_detect_o = gr.Button("Detect Scale+BPM")
                     btn_detect_o.click(_scale_bpm_wrap_slider, other_c, [scale_o, bpm_o])
                     other_fx = gr.CheckboxGroup(
-                        ["Reverb", "Distortion", "Gate", "Glitch", "Rhythmic Gate", "Looper"],
+                        [
+                            "Reverb",
+                            "Distortion",
+                            "Gate",
+                            "Glitch",
+                            "Rhythmic Gate",
+                            "Looper",
+                            "Multiband Compressor",
+                        ],
                         label="FX",
                     )
                     other_prev = gr.State()
