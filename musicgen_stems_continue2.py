@@ -18,6 +18,7 @@ import subprocess as sp
 import sys
 import shutil
 import json
+import re
 import numpy as np
 import types
 
@@ -120,6 +121,12 @@ try:  # Retrieval-based Voice Conversion (RVC) library
 except Exception:  # pragma: no cover - optional runtime dep
     VoiceConverter = None  # type: ignore
     RVC_AVAILABLE = False
+
+try:  # WAN2Audio for sample analysis
+    import wan2audio  # type: ignore
+    WAN2AUDIO_AVAILABLE = True
+except Exception:  # pragma: no cover - optional runtime dep
+    WAN2AUDIO_AVAILABLE = False
 
 # ---------- Devices [ALTERED] ----------
 # Allow overriding the default GPU placement via environment variables.  Each
@@ -2195,6 +2202,44 @@ def master_track(
         gains,
     )
 
+
+def analyze_and_rename(audio_path: str) -> tuple[str, str, float, str]:
+    """Caption ``audio_path`` with five words, detect key/BPM and rename it.
+
+    Parameters
+    ----------
+    audio_path:
+        Path to the audio sample that should be analyzed.
+
+    Returns
+    -------
+    tuple
+        ``(description, key, bpm, new_path)`` where ``new_path`` is the
+        potentially renamed file.  When analysis fails or renaming is not
+        possible the original path is returned.
+    """
+
+    if not audio_path:
+        return "", "", 0.0, ""
+
+    if WAN2AUDIO_AVAILABLE:
+        desc, key, bpm = wan2audio.analyze(audio_path)
+    else:  # pragma: no cover - executed when WAN2Audio is unavailable
+        desc, key, bpm = ("analysis unavailable", "C", 120.0)
+
+    # Replace any non alphanumeric character with an underscore so that the
+    # resulting filename is portable across filesystems.
+    safe_desc = re.sub(r"[^0-9A-Za-z]+", "_", desc).strip("_")
+    new_name = f"{safe_desc}_{key}_{int(round(bpm))}{Path(audio_path).suffix}"
+    new_path = str(Path(audio_path).with_name(new_name))
+
+    try:
+        os.rename(audio_path, new_path)
+    except OSError:  # pragma: no cover - depends on filesystem permissions
+        new_path = audio_path
+
+    return desc, key, float(bpm), new_path
+
 # ============================================================================
 # UI (tabs, all Enqueue) [ALTERED]
 # ============================================================================
@@ -2648,6 +2693,19 @@ def ui_full(launch_kwargs):
                     loop_dur,
                 ],
                 outputs=out_mix,
+            )
+        # ----- ANALYZE -----
+        with gr.Tab("Analyze"):
+            analyze_in = gr.Audio(label="Sample", type="filepath")
+            desc_out = gr.Textbox(label="Description", interactive=False)
+            key_out = gr.Textbox(label="Key", interactive=False)
+            bpm_out = gr.Number(label="BPM", value=0, interactive=False)
+            renamed_out = gr.Textbox(label="Renamed File", interactive=False)
+            btn_analyze = gr.Button("Analyze")
+            btn_analyze.click(
+                analyze_and_rename,
+                inputs=analyze_in,
+                outputs=[desc_out, key_out, bpm_out, renamed_out],
             )
 
         # ----- MASTERING -----
