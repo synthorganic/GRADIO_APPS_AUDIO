@@ -638,7 +638,7 @@ def add_queue_item(queue, item):
     queue = list(queue or [])
     if item:
         queue.append(item)
-    return queue, gr.update(choices=queue, value=None), ""
+    return queue, gr.update(choices=queue, value=item), ""
 
 
 def delete_queue_item(queue, selected):
@@ -1094,6 +1094,65 @@ def detect_bpm(src) -> float:
         return float(tempo)
     except Exception:
         return 0.0
+
+
+def detect_scale(src) -> str:
+    """Return estimated musical key of a file or raw audio using librosa."""
+    if not LIBROSA_AVAILABLE or src is None:  # pragma: no cover - optional
+        return "Unknown"
+    try:
+        if isinstance(src, str):
+            y, sr = librosa.load(src, sr=None, mono=True)
+        elif isinstance(src, (list, tuple)) and len(src) == 2:
+            sr, y = src
+            if y.ndim > 1:
+                y = y.mean(axis=0)
+        else:
+            return "Unknown"
+        chroma = librosa.feature.chroma_cqt(y=y, sr=sr)
+        chroma_mean = chroma.mean(axis=1)
+        major_profile = np.array(
+            [6.35, 2.23, 3.48, 2.33, 4.38, 4.09, 2.52, 5.19, 2.39, 3.66, 2.29, 2.88]
+        )
+        minor_profile = np.array(
+            [6.33, 2.68, 3.52, 5.38, 2.60, 3.53, 2.54, 4.75, 3.98, 2.69, 3.34, 3.17]
+        )
+        profiles = np.vstack(
+            [np.roll(major_profile, i) for i in range(12)]
+            + [np.roll(minor_profile, i) for i in range(12)]
+        )
+        correlation = profiles @ chroma_mean
+        key_idx = int(np.argmax(correlation))
+        notes = ["C", "C#", "D", "D#", "E", "F", "F#", "G", "G#", "A", "A#", "B"]
+        if key_idx < 12:
+            return f"{notes[key_idx]} Major"
+        return f"{notes[key_idx - 12]} Minor"
+    except Exception:
+        return "Unknown"
+
+
+def detect_scale_bpm(src) -> tuple[str, float]:
+    """Return detected scale and BPM for ``src``."""
+    return detect_scale(src), detect_bpm(src)
+
+
+def _scale_bpm_wrap(p):
+    """Gradio helper to return scale and BPM for uploads."""
+    if isinstance(p, dict):
+        p = p.get("name") or p.get("path") or p.get("data")
+    return detect_scale_bpm(p)
+
+
+def _scale_bpm_wrap_slider(p):
+    """Return scale and update a BPM slider for uploads."""
+    scale, bpm_val = _scale_bpm_wrap(p)
+    return scale, gr.update(value=bpm_val)
+
+
+def _scale_bpm_wrap_full(p):
+    """Return scale, update a BPM slider and provide numeric readout."""
+    scale, bpm_val = _scale_bpm_wrap(p)
+    return scale, gr.update(value=bpm_val), bpm_val
 
 
 def _bpm_wrap(p):
@@ -2025,10 +2084,11 @@ def ui_full(launch_kwargs):
 
         # ----- QUEUE MANAGER -----
         with gr.Tab("Queue"):
+            gr.Markdown("Manage items that will be processed sequentially.")
             queue_display = gr.Dropdown(label="Queued Items", choices=[], interactive=True)
             with gr.Row():
-                new_item = gr.Textbox(label="New Item")
-                btn_add_q = gr.Button("Add")
+                new_item = gr.Textbox(label="New Queue Item")
+                btn_add_q = gr.Button("Queue Item")
                 btn_del_q = gr.Button("Delete Selected")
             btn_add_q.click(
                 add_queue_item,
@@ -2048,6 +2108,11 @@ def ui_full(launch_kwargs):
             with gr.Row():
                 text = gr.Textbox(label="Text Prompt", placeholder="e.g., glossy synthwave with gated drums")
                 melody = gr.Audio(label="Style Excerpt (optional)", type="numpy")
+                btn_detect_mel = gr.Button("Detect Scale+BPM")
+            with gr.Row():
+                scale_mel = gr.Textbox(label="Detected Scale", interactive=False)
+                bpm_mel = gr.Number(label="Detected BPM", value=0, interactive=False)
+            btn_detect_mel.click(_scale_bpm_wrap, melody, [scale_mel, bpm_mel])
             with gr.Row():
                 dur = gr.Slider(1, 60, value=10, step=1, label="Duration (s)")
                 eval_q = gr.Slider(1, 6, value=3, step=1, label="Style RVQ")
@@ -2075,17 +2140,24 @@ def ui_full(launch_kwargs):
         with gr.Tab("Section Combiner"):
             with gr.Row():
                 intro_audio = gr.Audio(label="Intro Audio", type="numpy")
+                btn_detect_intro = gr.Button("Detect Scale+BPM")
             with gr.Row():
                 next_audio = gr.Audio(label="Next Audio", type="numpy")
+                btn_detect_next = gr.Button("Detect Scale+BPM")
             prompt = gr.Textbox(label="Prompt")
             model_choice = gr.Radio(["AudioGen", "Style"], value="AudioGen", label="Generator")
             with gr.Row():
                 bpm = gr.Slider(40, 240, value=120, step=1, label="Tempo (BPM)")
                 beats = gr.Slider(2, 32, value=8, step=1, label="Transition Length (beats)")
                 xf_beats = gr.Slider(0.0, 8.0, value=1.0, step=0.25, label="Crossfade (beats)")
+            scale_comb = gr.Textbox(label="Detected Scale", interactive=False)
             bpm_detect = gr.Number(value=0, label="Detected BPM", interactive=False)
-            intro_audio.upload(_bpm_wrap_with_readout, intro_audio, [bpm, bpm_detect])
-            next_audio.upload(_bpm_wrap_with_readout, next_audio, [bpm, bpm_detect])
+            btn_detect_intro.click(
+                _scale_bpm_wrap_full, intro_audio, [scale_comb, bpm, bpm_detect]
+            )
+            btn_detect_next.click(
+                _scale_bpm_wrap_full, next_audio, [scale_comb, bpm, bpm_detect]
+            )
             decoder = gr.Radio(["Default", "MultiBand_Diffusion"], value="Default", label="Decoder")
             out_trim_comb = gr.Slider(-24.0, 0.0, value=-3.0, step=0.5, label="Output Trim (dB)")
             out_transition = gr.Audio(label="Transition", type="filepath")
@@ -2109,6 +2181,11 @@ def ui_full(launch_kwargs):
         with gr.Tab("AudioGen Continuation (GPU0)"):
             with gr.Row():
                 audio_in = gr.Audio(label="Input Clip", type="numpy")
+                btn_detect_ag = gr.Button("Detect Scale+BPM")
+            with gr.Row():
+                scale_ag = gr.Textbox(label="Detected Scale", interactive=False)
+                bpm_ag = gr.Number(label="Detected BPM", value=0, interactive=False)
+            btn_detect_ag.click(_scale_bpm_wrap, audio_in, [scale_ag, bpm_ag])
             with gr.Row():
                 prompt = gr.Textbox(label="Prompt (optional)", placeholder="e.g., keep the groove, add arps")
             with gr.Row():
@@ -2135,6 +2212,11 @@ def ui_full(launch_kwargs):
             if DEMUCS_AVAILABLE:
                 with gr.Row():
                     audio_in2 = gr.Audio(label="Input Track", type="numpy")
+                    btn_detect_in2 = gr.Button("Detect Scale+BPM")
+                with gr.Row():
+                    scale_in2 = gr.Textbox(label="Detected Scale", interactive=False)
+                    bpm_in2 = gr.Number(label="Detected BPM", value=0, interactive=False)
+                btn_detect_in2.click(_scale_bpm_wrap, audio_in2, [scale_in2, bpm_in2])
                 with gr.Row():
                     drums = gr.Audio(label="Drums", type="filepath")
                 with gr.Row():
@@ -2159,9 +2241,11 @@ def ui_full(launch_kwargs):
                     bpm_d = gr.Slider(40, 220, label="BPM")
                     gain_d = gr.Slider(-60.0, 6.0, value=-6.0, step=0.5, label="Gain (dB)")
                     drums_c.upload(_waveform_plot, drums_c, drums_vis)
-                    drums_c.upload(_bpm_wrap, drums_c, bpm_d)
                     drums_c.upload(_apply_gain_file, [drums_c, gain_d], drums_c)
                     gain_d.change(_apply_gain_file, [drums_c, gain_d], drums_c)
+                    scale_d = gr.Textbox(label="Scale", interactive=False)
+                    btn_detect_d = gr.Button("Detect Scale+BPM")
+                    btn_detect_d.click(_scale_bpm_wrap_slider, drums_c, [scale_d, bpm_d])
                     drums_fx = gr.CheckboxGroup(
                         ["Reverb", "Distortion", "Gate", "Glitch", "Rhythmic Gate", "Looper"],
                         label="FX",
@@ -2177,9 +2261,11 @@ def ui_full(launch_kwargs):
                     bpm_v = gr.Slider(40, 220, label="BPM")
                     gain_v = gr.Slider(-60.0, 6.0, value=-6.0, step=0.5, label="Gain (dB)")
                     vocals_c.upload(_waveform_plot, vocals_c, vocals_vis)
-                    vocals_c.upload(_bpm_wrap, vocals_c, bpm_v)
                     vocals_c.upload(_apply_gain_file, [vocals_c, gain_v], vocals_c)
                     gain_v.change(_apply_gain_file, [vocals_c, gain_v], vocals_c)
+                    scale_v = gr.Textbox(label="Scale", interactive=False)
+                    btn_detect_v = gr.Button("Detect Scale+BPM")
+                    btn_detect_v.click(_scale_bpm_wrap_slider, vocals_c, [scale_v, bpm_v])
                     vocals_fx = gr.CheckboxGroup(
                         ["Reverb", "Distortion", "Gate", "Glitch", "Rhythmic Gate", "Looper"],
                         label="FX",
@@ -2195,9 +2281,11 @@ def ui_full(launch_kwargs):
                     bpm_b = gr.Slider(40, 220, label="BPM")
                     gain_b = gr.Slider(-60.0, 6.0, value=-6.0, step=0.5, label="Gain (dB)")
                     bass_c.upload(_waveform_plot, bass_c, bass_vis)
-                    bass_c.upload(_bpm_wrap, bass_c, bpm_b)
                     bass_c.upload(_apply_gain_file, [bass_c, gain_b], bass_c)
                     gain_b.change(_apply_gain_file, [bass_c, gain_b], bass_c)
+                    scale_b = gr.Textbox(label="Scale", interactive=False)
+                    btn_detect_b = gr.Button("Detect Scale+BPM")
+                    btn_detect_b.click(_scale_bpm_wrap_slider, bass_c, [scale_b, bpm_b])
                     bass_fx = gr.CheckboxGroup(
                         ["Reverb", "Distortion", "Gate", "Glitch", "Rhythmic Gate", "Looper"],
                         label="FX",
@@ -2213,9 +2301,11 @@ def ui_full(launch_kwargs):
                     bpm_o = gr.Slider(40, 220, label="BPM")
                     gain_o = gr.Slider(-60.0, 6.0, value=-6.0, step=0.5, label="Gain (dB)")
                     other_c.upload(_waveform_plot, other_c, other_vis)
-                    other_c.upload(_bpm_wrap, other_c, bpm_o)
                     other_c.upload(_apply_gain_file, [other_c, gain_o], other_c)
                     gain_o.change(_apply_gain_file, [other_c, gain_o], other_c)
+                    scale_o = gr.Textbox(label="Scale", interactive=False)
+                    btn_detect_o = gr.Button("Detect Scale+BPM")
+                    btn_detect_o.click(_scale_bpm_wrap_slider, other_c, [scale_o, bpm_o])
                     other_fx = gr.CheckboxGroup(
                         ["Reverb", "Distortion", "Gate", "Glitch", "Rhythmic Gate", "Looper"],
                         label="FX",
@@ -2401,8 +2491,14 @@ def ui_full(launch_kwargs):
         with gr.Tab("Mastering"):
             with gr.Row():
                 audio_in3 = gr.Audio(label="Input Track", type="numpy")
+                btn_detect_mst = gr.Button("Detect Scale+BPM")
             with gr.Row():
                 ref_master = gr.Audio(label="Reference Track", type="filepath")
+                btn_detect_ref = gr.Button("Detect Scale+BPM")
+            scale_master = gr.Textbox(label="Detected Scale", interactive=False)
+            bpm_master = gr.Number(label="Detected BPM", value=0, interactive=False)
+            btn_detect_mst.click(_scale_bpm_wrap, audio_in3, [scale_master, bpm_master])
+            btn_detect_ref.click(_scale_bpm_wrap, ref_master, [scale_master, bpm_master])
             out_trim_master = gr.Slider(-24.0, 0.0, value=-1.0, step=0.5, label="Output Trim (dB)")
             width_master = gr.Slider(0.5, 3.0, value=1.5, step=0.1, label="Stereo Width")
             pan_master = gr.Slider(-1.0, 1.0, value=0.0, step=0.1, label="Stereo Pan")
@@ -2460,6 +2556,7 @@ def ui_full(launch_kwargs):
             )
 
             save_btn = gr.Button("Save Settings")
+            save_status = gr.Markdown("", elem_id="save_status")
 
             def _save_settings(shard_str, models, *gains):
                 global CUSTOM_SHARD_RAW, CUSTOM_SHARD_DEVICES, MODEL_OPTIONS
@@ -2474,8 +2571,9 @@ def ui_full(launch_kwargs):
                     "model_options": models,
                 }
                 save_settings(cfg)
+                return "✅ Settings saved"
 
-            save_btn.click(_save_settings, [shard_box, model_opts, *freq_sliders], None)
+            save_btn.click(_save_settings, [shard_box, model_opts, *freq_sliders], save_status)
 
         # Global queue
         demo.queue(concurrency_count=1, max_size=32).launch(**launch_kwargs)
