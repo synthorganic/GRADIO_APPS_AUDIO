@@ -270,9 +270,16 @@ button:hover, .gr-button:hover {{
     background: var(--color-accent);
     color: #000;
 }}
+mark, .highlight {{
+    background: var(--color-accent);
+    color: #000;
+}}
 #top-banner {{
     display: flex;
     justify-content: flex-start;
+    align-items: flex-start;
+    margin-left: 0;
+    text-align: left;
 }}
 """
 
