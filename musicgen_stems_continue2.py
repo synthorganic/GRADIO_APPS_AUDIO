@@ -2414,6 +2414,31 @@ def analyze_and_rename_batch(audio_paths: Iterable[str]) -> list[list]:
         results.append([desc, key, bpm, new_path])
     return results
 
+
+def _analyze_and_rename_batch_files(
+    files: Iterable["tempfile._TemporaryFileWrapper"] | None,
+) -> list[list]:
+    """Wrapper to accept temporary file objects from ``gr.Files``.
+
+    ``gr.Files`` returns a list of ``tempfile.NamedTemporaryFile`` objects when
+    ``type="file"``. This helper extracts the underlying file paths so the
+    existing :func:`analyze_and_rename_batch` function can operate unchanged.
+
+    Parameters
+    ----------
+    files:
+        Iterable of temporary files as provided by ``gr.Files``. May be ``None``
+        if no files were uploaded.
+
+    Returns
+    -------
+    list of lists
+        Direct passthrough of :func:`analyze_and_rename_batch` results.
+    """
+
+    paths = [f.name for f in files] if files else []
+    return analyze_and_rename_batch(paths)
+
 # ============================================================================
 # UI (tabs, all Enqueue) [ALTERED]
 # ============================================================================
@@ -2902,7 +2927,7 @@ def ui_full(launch_kwargs):
         # ----- ANALYZE -----
         with gr.Tab("Analyze"):
             analyze_in = gr.Files(
-                label="Samples", type="filepath", file_types=["audio"]
+                label="Samples", type="file", file_types=["audio"]
             )
             analyze_out = gr.Dataframe(
                 headers=["Description", "Key", "BPM", "Renamed File"],
@@ -2912,7 +2937,7 @@ def ui_full(launch_kwargs):
             )
             btn_analyze = gr.Button("Analyze")
             btn_analyze.click(
-                analyze_and_rename_batch,
+                _analyze_and_rename_batch_files,
                 inputs=analyze_in,
                 outputs=analyze_out,
                 queue=analyze_queue,
