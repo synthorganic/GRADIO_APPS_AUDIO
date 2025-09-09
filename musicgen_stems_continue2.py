@@ -2474,6 +2474,13 @@ def _analyze_and_rename_batch_files(
 # UI (tabs, all Enqueue) [ALTERED]
 # ============================================================================
 def ui_full(launch_kwargs):
+    # Ensure the output directory is always allowed for file serving
+    launch_kwargs = dict(launch_kwargs)
+    allowed_paths = list(launch_kwargs.get("allowed_paths", []))
+    if str(TMP_DIR) not in allowed_paths:
+        allowed_paths.append(str(TMP_DIR))
+    launch_kwargs["allowed_paths"] = allowed_paths
+
     analyze_queue = gr.Queue(concurrency_count=1) if hasattr(gr, "Queue") else True
     with gr.Blocks(css=CUSTOM_CSS) as demo:
         demo.title = "Fortheye"
