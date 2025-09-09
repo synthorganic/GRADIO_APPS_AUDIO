@@ -21,6 +21,7 @@ import json
 import re
 import numpy as np
 import types
+from typing import Iterable
 
 try:  # pragma: no cover - optional runtime dependency
     from scipy.signal import cheby1, lfilter
@@ -37,6 +38,9 @@ except Exception:  # pragma: no cover - allow import without torch
         nn=types.SimpleNamespace(Module=object, Parameter=lambda *a, **k: None),
         Tensor=object,
         device=lambda *a, **k: types.SimpleNamespace(type="cpu"),
+        from_numpy=lambda a: types.SimpleNamespace(
+            float=lambda: types.SimpleNamespace(t=lambda: a)
+        ),
         cuda=types.SimpleNamespace(is_available=lambda: False, device_count=lambda: 0),
     )
     F = types.SimpleNamespace()
@@ -2357,10 +2361,36 @@ def analyze_and_rename(audio_path: str) -> tuple[str, str, float, str]:
 
     return desc, key, float(bpm), new_path
 
+
+def analyze_and_rename_batch(audio_paths: Iterable[str]) -> list[list]:
+    """Analyze and rename multiple audio files.
+
+    Parameters
+    ----------
+    audio_paths:
+        Iterable of paths to audio samples.
+
+    Returns
+    -------
+    list of lists
+        Each inner list corresponds to ``[description, key, bpm, new_path]``.
+    """
+
+    results: list[list] = []
+    if not audio_paths:
+        return results
+    for path in audio_paths:
+        if not path:
+            continue
+        desc, key, bpm, new_path = analyze_and_rename(path)
+        results.append([desc, key, bpm, new_path])
+    return results
+
 # ============================================================================
 # UI (tabs, all Enqueue) [ALTERED]
 # ============================================================================
 def ui_full(launch_kwargs):
+    analyze_queue = gr.Queue(concurrency_count=1) if hasattr(gr, "Queue") else True
     with gr.Blocks(css=CUSTOM_CSS) as demo:
         demo.title = "World's Last Music App by Fortheye"
         gr.Markdown("# World's Last Music App by Fortheye")
@@ -2814,16 +2844,21 @@ def ui_full(launch_kwargs):
             )
         # ----- ANALYZE -----
         with gr.Tab("Analyze"):
-            analyze_in = gr.Audio(label="Sample", type="filepath")
-            desc_out = gr.Textbox(label="Description", interactive=False)
-            key_out = gr.Textbox(label="Key", interactive=False)
-            bpm_out = gr.Number(label="BPM", value=0, interactive=False)
-            renamed_out = gr.Textbox(label="Renamed File", interactive=False)
+            analyze_in = gr.Files(
+                label="Samples", type="filepath", file_types=["audio"]
+            )
+            analyze_out = gr.Dataframe(
+                headers=["Description", "Key", "BPM", "Renamed File"],
+                datatype=["str", "str", "number", "str"],
+                label="Analysis",
+                interactive=False,
+            )
             btn_analyze = gr.Button("Analyze")
             btn_analyze.click(
-                analyze_and_rename,
+                analyze_and_rename_batch,
                 inputs=analyze_in,
-                outputs=[desc_out, key_out, bpm_out, renamed_out],
+                outputs=analyze_out,
+                queue=analyze_queue,
             )
 
         # ----- MASTERING -----
