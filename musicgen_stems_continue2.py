@@ -18,6 +18,7 @@ import subprocess as sp
 import sys
 import shutil
 import json
+import tempfile
 import re
 import numpy as np
 import types
@@ -2416,19 +2417,21 @@ def analyze_and_rename_batch(audio_paths: Iterable[str]) -> list[list]:
 
 
 def _analyze_and_rename_batch_files(
-    files: Iterable["tempfile._TemporaryFileWrapper"] | None,
+    files: Iterable[str | tempfile._TemporaryFileWrapper] | None,
 ) -> list[list]:
-    """Wrapper to accept temporary file objects from ``gr.Files``.
+    """Wrapper to accept uploaded files from ``gr.Files``.
 
-    ``gr.Files`` returns a list of ``tempfile.NamedTemporaryFile`` objects when
-    ``type="file"``. This helper extracts the underlying file paths so the
-    existing :func:`analyze_and_rename_batch` function can operate unchanged.
+    Depending on the Gradio version, ``gr.Files`` may yield either a list of
+    ``tempfile.NamedTemporaryFile`` objects (when ``type="file"``) or plain file
+    paths as strings (when ``type="filepath"``). This helper normalizes both
+    forms to paths so the existing :func:`analyze_and_rename_batch` function can
+    operate unchanged.
 
     Parameters
     ----------
     files:
-        Iterable of temporary files as provided by ``gr.Files``. May be ``None``
-        if no files were uploaded.
+        Iterable of file paths or temporary files as provided by ``gr.Files``.
+        May be ``None`` if no files were uploaded.
 
     Returns
     -------
@@ -2436,7 +2439,10 @@ def _analyze_and_rename_batch_files(
         Direct passthrough of :func:`analyze_and_rename_batch` results.
     """
 
-    paths = [f.name for f in files] if files else []
+    paths = []
+    if files:
+        for f in files:
+            paths.append(f if isinstance(f, str) else f.name)
     return analyze_and_rename_batch(paths)
 
 # ============================================================================
@@ -2927,7 +2933,7 @@ def ui_full(launch_kwargs):
         # ----- ANALYZE -----
         with gr.Tab("Analyze"):
             analyze_in = gr.Files(
-                label="Samples", type="file", file_types=["audio"]
+                label="Samples", type="filepath", file_types=["audio"]
             )
             analyze_out = gr.Dataframe(
                 headers=["Description", "Key", "BPM", "Renamed File"],
