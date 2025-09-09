@@ -224,7 +224,8 @@ body, .gradio-container {{
     --primary-hue: 150;
     --color-primary: #434750;
     --color-secondary: #475043;
-    --color-accent: #43FF7E;
+    --color-accent: #39FF14;
+    --color-accent-soft: #39FF14;
     --color-background-primary: #475043;
     --color-background-secondary: #434750;
     --color-background-tertiary: #434750;
@@ -255,6 +256,23 @@ body, .gradio-container {{
 }}
 .icon-revert {{
     background-image: url('file=assets/light_revert_effects.png');
+}}
+button, .gr-button {{
+    background-color: var(--color-accent) !important;
+    border-color: var(--color-accent) !important;
+    color: #000 !important;
+}}
+button:hover, .gr-button:hover {{
+    background-color: var(--color-accent) !important;
+    opacity: 0.9;
+}}
+::selection {{
+    background: var(--color-accent);
+    color: #000;
+}}
+#top-banner {{
+    display: flex;
+    justify-content: flex-start;
 }}
 """
 
@@ -2452,7 +2470,12 @@ def ui_full(launch_kwargs):
     analyze_queue = gr.Queue(concurrency_count=1) if hasattr(gr, "Queue") else True
     with gr.Blocks(css=CUSTOM_CSS) as demo:
         demo.title = "Fortheye"
-        gr.Image("assets/banner.png", show_label=False, show_download_button=False)
+        gr.Image(
+            "assets/banner.png",
+            show_label=False,
+            show_download_button=False,
+            elem_id="top-banner",
+        )
         queue_items = gr.State([])
         output_folder = gr.State(str(TMP_DIR))
         # Harmonization controls removed due to fidelity concerns
