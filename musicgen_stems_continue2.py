@@ -3072,7 +3072,7 @@ def ui_full(launch_kwargs):
             save_btn.click(_save_settings, [shard_box, model_opts, *freq_sliders], save_status)
 
         # Global queue
-        demo.queue(concurrency_count=1, max_size=32).launch(**launch_kwargs)
+        demo.queue(default_concurrency_limit=1, max_size=32).launch(**launch_kwargs)
 
 # ---------- Main [UNCHANGED] ----------
 if __name__ == "__main__":
