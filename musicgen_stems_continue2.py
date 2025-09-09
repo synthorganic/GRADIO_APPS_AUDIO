@@ -22,6 +22,7 @@ import re
 import numpy as np
 import types
 from typing import Iterable
+from prompt_notebook import save_prompt, show_notebook, load_prompt
 
 try:  # pragma: no cover - optional runtime dependency
     from scipy.signal import cheby1, lfilter
@@ -226,6 +227,33 @@ body, .gradio-container {{
     --color-background-primary: #475043;
     --color-background-secondary: #434750;
     --color-background-tertiary: #434750;
+}}
+.icon-btn {{
+    width: 40px;
+    height: 40px;
+    background-color: var(--color-primary);
+    background-size: 24px 24px;
+    background-position: center;
+    background-repeat: no-repeat;
+    border: 1px solid var(--color-accent);
+}}
+.icon-btn:hover {{
+    background-color: var(--color-accent);
+}}
+.icon-save {{
+    background-image: url('file=assets/checkmark.png');
+}}
+.icon-view {{
+    background-image: url('file=assets/light_looper.png');
+}}
+.icon-preview {{
+    background-image: url('file=assets/light_render_preview_effects.png');
+}}
+.icon-harmonize {{
+    background-image: url('file=assets/light_reverb.png');
+}}
+.icon-revert {{
+    background-image: url('file=assets/light_revert_effects.png');
 }}
 """
 
@@ -2392,9 +2420,8 @@ def analyze_and_rename_batch(audio_paths: Iterable[str]) -> list[list]:
 def ui_full(launch_kwargs):
     analyze_queue = gr.Queue(concurrency_count=1) if hasattr(gr, "Queue") else True
     with gr.Blocks(css=CUSTOM_CSS) as demo:
-        demo.title = "World's Last Music App by Fortheye"
-        gr.Markdown("# World's Last Music App by Fortheye")
-        # Image assets were removed to keep the repository text-only.
+        demo.title = "Fortheye"
+        gr.Image("assets/banner.png", show_label=False, show_download_button=False)
         queue_items = gr.State([])
         output_folder = gr.State(str(TMP_DIR))
         # Harmonization controls removed due to fidelity concerns
@@ -2423,13 +2450,23 @@ def ui_full(launch_kwargs):
         # ----- STYLE -----
         with gr.Tab("Style (MusicGen-Style, GPU2)"):
             with gr.Row():
-                text = gr.Textbox(label="Text Prompt", placeholder="e.g., glossy synthwave with gated drums")
+                with gr.Column():
+                    text = gr.Textbox(label="Text Prompt", placeholder="e.g., glossy synthwave with gated drums")
+                    with gr.Row():
+                        btn_save_text = gr.Button("", elem_classes=["icon-btn", "icon-save"])
+                        btn_view_text = gr.Button("", elem_classes=["icon-btn", "icon-view"])
+                    notebook_text = gr.Dropdown(
+                        label="Prompt Notebook", choices=[], visible=False
+                    )
                 melody = gr.Audio(label="Style Excerpt (optional)", type="numpy")
                 btn_detect_mel = gr.Button("Detect Scale+BPM")
             with gr.Row():
                 scale_mel = gr.Textbox(label="Detected Scale", interactive=False)
                 bpm_mel = gr.Number(label="Detected BPM", value=0, interactive=False)
             btn_detect_mel.click(_scale_bpm_wrap, melody, [scale_mel, bpm_mel])
+            btn_save_text.click(save_prompt, inputs=text, outputs=None)
+            btn_view_text.click(show_notebook, outputs=notebook_text)
+            notebook_text.change(load_prompt, inputs=notebook_text, outputs=text)
             with gr.Row():
                 dur = gr.Slider(1, 60, value=10, step=1, label="Duration (s)")
                 eval_q = gr.Slider(1, 6, value=3, step=1, label="Style RVQ")
@@ -2461,7 +2498,11 @@ def ui_full(launch_kwargs):
             with gr.Row():
                 next_audio = gr.Audio(label="Next Audio", type="numpy")
                 btn_detect_next = gr.Button("Detect Scale+BPM")
-            prompt = gr.Textbox(label="Prompt")
+            with gr.Row():
+                prompt = gr.Textbox(label="Prompt")
+                btn_save_comb = gr.Button("", elem_classes=["icon-btn", "icon-save"])
+                btn_view_comb = gr.Button("", elem_classes=["icon-btn", "icon-view"])
+            notebook_comb = gr.Dropdown(label="Prompt Notebook", choices=[], visible=False)
             model_choice = gr.Radio(["AudioGen", "Style", "Melody-Large"], value="AudioGen", label="Generator")
             with gr.Row():
                 bpm = gr.Slider(40, 240, value=120, step=1, label="Tempo (BPM)")
@@ -2475,6 +2516,9 @@ def ui_full(launch_kwargs):
             btn_detect_next.click(
                 _scale_bpm_wrap_full, next_audio, [scale_comb, bpm, bpm_detect]
             )
+            btn_save_comb.click(save_prompt, inputs=prompt, outputs=None)
+            btn_view_comb.click(show_notebook, outputs=notebook_comb)
+            notebook_comb.change(load_prompt, inputs=notebook_comb, outputs=prompt)
             decoder = gr.Radio(["Default", "MultiBand_Diffusion"], value="Default", label="Decoder")
             out_trim_comb = gr.Slider(-24.0, 0.0, value=-3.0, step=0.5, label="Output Trim (dB)")
             out_transition = gr.Audio(label="Transition", type="filepath")
@@ -2505,6 +2549,12 @@ def ui_full(launch_kwargs):
             btn_detect_ag.click(_scale_bpm_wrap, audio_in, [scale_ag, bpm_ag])
             with gr.Row():
                 prompt = gr.Textbox(label="Prompt (optional)", placeholder="e.g., keep the groove, add arps")
+                btn_save_cont = gr.Button("", elem_classes=["icon-btn", "icon-save"])
+                btn_view_cont = gr.Button("", elem_classes=["icon-btn", "icon-view"])
+            notebook_cont = gr.Dropdown(label="Prompt Notebook", choices=[], visible=False)
+            btn_save_cont.click(save_prompt, inputs=prompt, outputs=None)
+            btn_view_cont.click(show_notebook, outputs=notebook_cont)
+            notebook_cont.change(load_prompt, inputs=notebook_cont, outputs=prompt)
             model_ag = gr.Radio(["AudioGen", "Melody-Large"], value="AudioGen", label="Model")
             with gr.Row():
                 lookback = gr.Slider(0.5, 30.0, value=6.0, step=0.5, label="Lookback (s)")
@@ -2550,7 +2600,14 @@ def ui_full(launch_kwargs):
 
         # ----- COMBINE -----
         with gr.Tab("Combine Stems"):
-            prompt_name = gr.Textbox(label="Prompt / Name", value="")
+            with gr.Row():
+                prompt_name = gr.Textbox(label="Prompt / Name", value="")
+                btn_save_name = gr.Button("", elem_classes=["icon-btn", "icon-save"])
+                btn_view_name = gr.Button("", elem_classes=["icon-btn", "icon-view"])
+            notebook_name = gr.Dropdown(label="Prompt Notebook", choices=[], visible=False)
+            btn_save_name.click(save_prompt, inputs=prompt_name, outputs=None)
+            btn_view_name.click(show_notebook, outputs=notebook_name)
+            notebook_name.change(load_prompt, inputs=notebook_name, outputs=prompt_name)
             harm_scale = gr.Dropdown(SCALE_NAMES, value="C Major", label="Harmonize Scale")
             with gr.Row():
                 with gr.Column():
@@ -2578,9 +2635,9 @@ def ui_full(launch_kwargs):
                     )
                     drums_prev = gr.State()
                     with gr.Row():
-                        btn_prev_d = gr.Button("Render/Preview Effects")
-                        btn_harm_d = gr.Button("Harmonize")
-                        btn_rev_d = gr.Button("Revert Effects")
+                        btn_prev_d = gr.Button("", elem_classes=["icon-btn", "icon-preview"])
+                        btn_harm_d = gr.Button("", elem_classes=["icon-btn", "icon-harmonize"])
+                        btn_rev_d = gr.Button("", elem_classes=["icon-btn", "icon-revert"])
                 with gr.Column():
                     vocals_c = gr.Audio(label="Vocals", type="filepath")
                     vocals_vis = gr.Plot(label="Vocals Visual")
@@ -2606,9 +2663,9 @@ def ui_full(launch_kwargs):
                     )
                     vocals_prev = gr.State()
                     with gr.Row():
-                        btn_prev_v = gr.Button("Render/Preview Effects")
-                        btn_harm_v = gr.Button("Harmonize")
-                        btn_rev_v = gr.Button("Revert Effects")
+                        btn_prev_v = gr.Button("", elem_classes=["icon-btn", "icon-preview"])
+                        btn_harm_v = gr.Button("", elem_classes=["icon-btn", "icon-harmonize"])
+                        btn_rev_v = gr.Button("", elem_classes=["icon-btn", "icon-revert"])
                 with gr.Column():
                     bass_c = gr.Audio(label="Bass", type="filepath")
                     bass_vis = gr.Plot(label="Bass Visual")
@@ -2634,9 +2691,9 @@ def ui_full(launch_kwargs):
                     )
                     bass_prev = gr.State()
                     with gr.Row():
-                        btn_prev_b = gr.Button("Render/Preview Effects")
-                        btn_harm_b = gr.Button("Harmonize")
-                        btn_rev_b = gr.Button("Revert Effects")
+                        btn_prev_b = gr.Button("", elem_classes=["icon-btn", "icon-preview"])
+                        btn_harm_b = gr.Button("", elem_classes=["icon-btn", "icon-harmonize"])
+                        btn_rev_b = gr.Button("", elem_classes=["icon-btn", "icon-revert"])
                 with gr.Column():
                     other_c = gr.Audio(label="Other", type="filepath")
                     other_vis = gr.Plot(label="Other Visual")
@@ -2662,9 +2719,9 @@ def ui_full(launch_kwargs):
                     )
                     other_prev = gr.State()
                     with gr.Row():
-                        btn_prev_o = gr.Button("Render/Preview Effects")
-                        btn_harm_o = gr.Button("Harmonize")
-                        btn_rev_o = gr.Button("Revert Effects")
+                        btn_prev_o = gr.Button("", elem_classes=["icon-btn", "icon-preview"])
+                        btn_harm_o = gr.Button("", elem_classes=["icon-btn", "icon-harmonize"])
+                        btn_rev_o = gr.Button("", elem_classes=["icon-btn", "icon-revert"])
             with gr.Accordion("Effect Settings", open=False):
                 reverb_amt = gr.Slider(0.0, 1.0, value=0.0, step=0.05, label="Reverb")
                 dist_amt = gr.Slider(0.0, 1.0, value=0.0, step=0.05, label="Distortion")
