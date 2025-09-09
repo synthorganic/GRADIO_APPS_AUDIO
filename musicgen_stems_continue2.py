@@ -295,6 +295,7 @@ STYLE_USE_DIFFUSION = False
 AUDIOGEN_MODEL = None
 MEDIUM_MODEL = None
 LARGE_MODEL = None
+MELODY_MODEL = None
 # Cache one ``AudioSR`` model per device and keep an index for load balancing
 # across ``AUDIOSR_DEVICES``.
 AUDIOSR_MODELS = {}
@@ -804,6 +805,8 @@ def section_generate_transition(model, intro_audio, prompt, bpm, beats, decoder,
             decoder=decoder,
             out_trim_db=float(out_trim_db),
         )
+    if model == "Melody-Large":
+        return melody_generate_transition(intro_audio, prompt, duration, out_trim_db)
     # Default to AudioGen continuation
     lookback = min(6.0, duration)
     return audiogen_continuation(
@@ -904,6 +907,16 @@ def large_load_model():
         LARGE_MODEL = MusicGen.get_pretrained("facebook/musicgen-large")
         _move_musicgen(LARGE_MODEL, torch.device("cpu"))
     return LARGE_MODEL
+
+
+def melody_load_model():
+    """Lazy-load facebook/musicgen-melody-large on LARGE_DEVICE."""
+    global MELODY_MODEL
+    if MELODY_MODEL is None:
+        print("[Melody] Loading facebook/musicgen-melody-large")
+        MELODY_MODEL = MusicGen.get_pretrained("facebook/musicgen-melody")
+        _move_musicgen(MELODY_MODEL, torch.device("cpu"))
+    return MELODY_MODEL
 
 
 def style_predict(text, melody, duration=10, topk=200, topp=50.0, temperature=1.0,
@@ -1024,6 +1037,103 @@ def audiogen_continuation(
     glued = _crossfade_concat(tail_cpu, gen_cpu, sr=TARGET_SR, xf_sec=xf)  # (C, T)
 
     return _write_wav(glued, TARGET_SR, stem="audiogen_emul", trim_db=float(out_trim_db))
+
+
+def melody_continuation(
+    audio_input,
+    text_prompt: str = "",
+    lookback_sec: float = 6.0,
+    duration: int = 12,
+    topk: int = 200,
+    topp: float = 50.0,
+    temperature: float = 1.0,
+    cfg_coef: float = 3.0,
+    crossfade_sec: float = 1.25,
+    out_trim_db: float = -3.0,
+):
+    """Continuation using MusicGen Melody Large with crossfade."""
+    if audio_input is None:
+        raise gr.Error("Please provide an input audio clip.")
+
+    prompt = text_prompt or "Continuation"
+    lookback_sec = float(max(0.5, min(30.0, lookback_sec)))
+    tail = _prep_to_32k(audio_input, take_last_seconds=lookback_sec, device=UTILITY_DEVICE).cpu()
+
+    model = melody_load_model()
+    _move_musicgen(model, LARGE_DEVICE)
+    model.set_generation_params(
+        duration=int(duration),
+        top_k=int(topk),
+        top_p=float(topp),
+        temperature=float(temperature),
+        cfg_coef=float(cfg_coef),
+    )
+
+    gen_out = model.generate_with_chroma(
+        [prompt], melody_wavs=[tail], melody_sample_rate=TARGET_SR
+    )
+    gen = _extract_audio_batch(gen_out).detach().cpu().float()[0]
+
+    if _rms(gen) < 1e-6:
+        raise gr.Error("Generated segment is near-silent. Try a richer prompt or higher temperature/top_k.")
+
+    tail_cpu = tail.detach().cpu().float()
+    xf = float(max(0.25, min(crossfade_sec, lookback_sec * 0.5, 3.0)))
+    glued = _crossfade_concat(tail_cpu, gen, sr=TARGET_SR, xf_sec=xf)
+    return _write_wav(glued, TARGET_SR, stem="melody_emul", trim_db=float(out_trim_db))
+
+
+def melody_generate_transition(intro_audio, prompt, duration, out_trim_db):
+    """Generate a transition segment using MusicGen Melody Large."""
+    if intro_audio is None:
+        raise gr.Error("Please provide intro audio.")
+    mel = _prep_to_32k(intro_audio).cpu()
+    model = melody_load_model()
+    _move_musicgen(model, LARGE_DEVICE)
+    model.set_generation_params(duration=int(duration))
+    out = model.generate_with_chroma(
+        [prompt], melody_wavs=[mel], melody_sample_rate=TARGET_SR
+    )
+    gen = _extract_audio_batch(out)[0]
+    return _write_wav(gen, TARGET_SR, stem="melody_trans", trim_db=float(out_trim_db))
+
+
+def continuation(
+    model,
+    audio_input,
+    text_prompt="",
+    lookback_sec=6.0,
+    duration=12,
+    topk=200,
+    topp=50.0,
+    temperature=1.0,
+    cfg_coef=3.0,
+    out_trim_db=-3.0,
+):
+    """Dispatch continuation to AudioGen or Melody model."""
+    if model == "Melody-Large":
+        return melody_continuation(
+            audio_input,
+            text_prompt,
+            lookback_sec,
+            duration,
+            topk,
+            topp,
+            temperature,
+            cfg_coef,
+            out_trim_db=out_trim_db,
+        )
+    return audiogen_continuation(
+        audio_input,
+        text_prompt,
+        lookback_sec,
+        duration,
+        topk,
+        topp,
+        temperature,
+        cfg_coef,
+        out_trim_db=out_trim_db,
+    )
 
 # ============================================================================
 # STEMS (DEMUCS) TAB [UNCHANGED intent]
@@ -2145,17 +2255,24 @@ def _audiosr_process(audio_input):
         sr, wav_np = audio_input
     except Exception:
         raise gr.Error("Please provide an audio clip.")
-    in_path = TMP_DIR / f"audiosr_in_{uuid.uuid4().hex}.wav"
-    audio_write(str(in_path), torch.from_numpy(wav_np).float().t(), sr, add_suffix=False)
     model = audiosr_load_model()
-    out = audiosr_super_resolution(model, str(in_path))
-    if isinstance(out, torch.Tensor):
-        out = out.detach().cpu().numpy()
-    out_arr = out[0]
-    if out_arr.ndim == 1:
-        out_arr = out_arr[None, :]
+    chunk_samples = int(sr * 10)
+    chunks = []
+    for start in range(0, len(wav_np), chunk_samples):
+        end = start + chunk_samples
+        chunk = wav_np[start:end]
+        in_path = TMP_DIR / f"audiosr_in_{uuid.uuid4().hex}.wav"
+        audio_write(str(in_path), torch.from_numpy(chunk).float().t(), sr, add_suffix=False)
+        out = audiosr_super_resolution(model, str(in_path))
+        if isinstance(out, torch.Tensor):
+            out = out.detach().cpu().numpy()
+        out_arr = out[0]
+        if out_arr.ndim == 1:
+            out_arr = out_arr[None, :]
+        chunks.append(out_arr)
+    combined = np.concatenate(chunks, axis=1) if chunks else np.empty((1, 0))
     out_path = TMP_DIR / f"audiosr_out_{uuid.uuid4().hex}.wav"
-    audio_write(str(out_path), torch.from_numpy(out_arr).float(), 48000, add_suffix=False)
+    audio_write(str(out_path), torch.from_numpy(combined).float(), 48000, add_suffix=False)
     return str(out_path)
 
 
@@ -2315,7 +2432,7 @@ def ui_full(launch_kwargs):
                 next_audio = gr.Audio(label="Next Audio", type="numpy")
                 btn_detect_next = gr.Button("Detect Scale+BPM")
             prompt = gr.Textbox(label="Prompt")
-            model_choice = gr.Radio(["AudioGen", "Style"], value="AudioGen", label="Generator")
+            model_choice = gr.Radio(["AudioGen", "Style", "Melody-Large"], value="AudioGen", label="Generator")
             with gr.Row():
                 bpm = gr.Slider(40, 240, value=120, step=1, label="Tempo (BPM)")
                 beats = gr.Slider(2, 32, value=8, step=1, label="Transition Length (beats)")
@@ -2358,6 +2475,7 @@ def ui_full(launch_kwargs):
             btn_detect_ag.click(_scale_bpm_wrap, audio_in, [scale_ag, bpm_ag])
             with gr.Row():
                 prompt = gr.Textbox(label="Prompt (optional)", placeholder="e.g., keep the groove, add arps")
+            model_ag = gr.Radio(["AudioGen", "Melody-Large"], value="AudioGen", label="Model")
             with gr.Row():
                 lookback = gr.Slider(0.5, 30.0, value=6.0, step=0.5, label="Lookback (s)")
                 cont_len = gr.Slider(1, 60, value=12, step=1, label="Continuation Length (s)")
@@ -2371,8 +2489,8 @@ def ui_full(launch_kwargs):
                 out_ag = gr.Audio(label="Output", type="filepath")
             btn_ag = gr.Button("Enqueue", variant="primary")
             btn_ag.click(
-                audiogen_continuation,
-                inputs=[audio_in, prompt, lookback, cont_len, ag_topk, ag_topp, ag_temp, ag_cfg, out_trim_ag],
+                continuation,
+                inputs=[model_ag, audio_in, prompt, lookback, cont_len, ag_topk, ag_topp, ag_temp, ag_cfg, out_trim_ag],
                 outputs=out_ag,
                 queue=True,
             )
@@ -2764,6 +2882,39 @@ def ui_full(launch_kwargs):
             out_box = gr.Textbox(value=str(TMP_DIR), label="Output Folder")
             set_btn = gr.Button("Set")
             set_btn.click(lambda x: x, inputs=out_box, outputs=output_folder)
+
+            gpu_opts = [f"cuda:{i}" for i in range(max(1, torch.cuda.device_count()))]
+
+            def _gpu_row(label, value):
+                with gr.Row():
+                    gr.Markdown(label)
+                    return gr.Radio(gpu_opts, value=value, label="", interactive=True)
+
+            gr.Markdown("**GPU Selection**")
+            mg_small_gpu = _gpu_row("MusicGen Small", str(STYLE_DEVICE))
+            mg_large_gpu = _gpu_row("MusicGen Large", str(LARGE_DEVICE))
+            ag_gpu = _gpu_row("AudioGen Medium", str(AUDIOGEN_DEVICE))
+            audiosr_gpu = _gpu_row("AudioSR", str(AUDIOSR_DEVICE))
+            diffusion_gpu = _gpu_row("Diffusion", str(DIFFUSION_DEVICE))
+
+            apply_gpu = gr.Button("Apply GPU Assignments")
+            gpu_status = gr.Markdown("")
+
+            def _apply_gpus(mg_s, mg_l, ag_d, asr_d, diff_d):
+                global STYLE_DEVICE, LARGE_DEVICE, AUDIOGEN_DEVICE, AUDIOSR_DEVICES, AUDIOSR_DEVICE, DIFFUSION_DEVICE
+                STYLE_DEVICE = torch.device(mg_s)
+                LARGE_DEVICE = torch.device(mg_l)
+                AUDIOGEN_DEVICE = torch.device(ag_d)
+                AUDIOSR_DEVICES = [torch.device(asr_d)]
+                AUDIOSR_DEVICE = AUDIOSR_DEVICES[0]
+                DIFFUSION_DEVICE = torch.device(diff_d)
+                return "✅ GPU assignments updated"
+
+            apply_gpu.click(
+                _apply_gpus,
+                [mg_small_gpu, mg_large_gpu, ag_gpu, audiosr_gpu, diffusion_gpu],
+                gpu_status,
+            )
 
             shard_box = gr.Textbox(
                 value=CUSTOM_SHARD_RAW,
