@@ -3106,7 +3106,13 @@ if __name__ == "__main__":
 
     warnings.filterwarnings("ignore", category=UserWarning)
     logging.basicConfig(level=logging.INFO)
-    ui_full({"server_name": args.listen, "server_port": args.port})
+    ui_full(
+        {
+            "server_name": args.listen,
+            "server_port": args.port,
+            "allowed_paths": [str(TMP_DIR)],
+        }
+    )
 
 
 
