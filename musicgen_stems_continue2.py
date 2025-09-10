@@ -188,7 +188,11 @@ print(
 # ---------- Constants & paths [ALTERED] ----------
 TARGET_SR = 32000
 TARGET_AC = 1
-TMP_DIR = Path("/home/archway/music/n-Track")  # writable, persistent
+# Use a temporary directory within the repository so that generated files
+# reside in a location automatically permitted by Gradio. This avoids
+# InvalidPathError when returning files outside the working or system temp
+# directories and makes the folder safe to expose via ``allowed_paths``.
+TMP_DIR = (Path(__file__).resolve().parent / "outputs")
 TMP_DIR.mkdir(parents=True, exist_ok=True)
 
 # Persisted user settings (EQ, UI preferences, etc.) are stored as JSON within
