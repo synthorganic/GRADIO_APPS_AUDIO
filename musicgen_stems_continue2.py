@@ -157,7 +157,15 @@ LARGE_DEVICE = STYLE_DEVICE
 AUDIOGEN_DEVICE = _get_device("AUDIOGEN_DEVICE", str(MEDIUM_DEVICE))
 DIFFUSION_DEVICE = _get_device(
     "DIFFUSION_DEVICE",
-    "cuda:2" if torch.cuda.is_available() and torch.cuda.device_count() > 2 else "cpu",
+    (
+        "cuda:3"
+        if torch.cuda.is_available() and torch.cuda.device_count() > 3
+        else (
+            "cuda:1"
+            if torch.cuda.is_available() and torch.cuda.device_count() > 1
+            else "cpu"
+        )
+    ),
 )
 UTILITY_DEVICE = _get_device(
     "UTILITY_DEVICE",
@@ -536,6 +544,28 @@ def _offload_musicgen(model):
     """Push ``model`` back to CPU and free the current CUDA cache."""
     _move_musicgen(model, torch.device("cpu"))
     torch.cuda.empty_cache()
+
+
+def _apply_gpus(style_d, mg_l, ag_d, asr_d, diff_d):
+    """Reassign devices for already loaded models."""
+    global STYLE_DEVICE, MEDIUM_DEVICE, LARGE_DEVICE, AUDIOGEN_DEVICE, AUDIOSR_DEVICES, AUDIOSR_DEVICE, DIFFUSION_DEVICE
+
+    STYLE_DEVICE = torch.device(style_d)
+    LARGE_DEVICE = torch.device(mg_l)
+    MEDIUM_DEVICE = LARGE_DEVICE
+    AUDIOGEN_DEVICE = torch.device(ag_d)
+    AUDIOSR_DEVICES = [torch.device(asr_d)]
+    AUDIOSR_DEVICE = AUDIOSR_DEVICES[0]
+    DIFFUSION_DEVICE = torch.device(diff_d)
+
+    _move_musicgen(STYLE_MODEL, STYLE_DEVICE)
+    _move_musicgen(MEDIUM_MODEL, MEDIUM_DEVICE)
+    _move_musicgen(LARGE_MODEL, LARGE_DEVICE)
+    _move_musicgen(AUDIOGEN_MODEL, AUDIOGEN_DEVICE)
+    if STYLE_MBD is not None:
+        _move_to_device(STYLE_MBD, DIFFUSION_DEVICE)
+        STYLE_MBD.device = DIFFUSION_DEVICE
+    return "✅ GPU assignments updated"
 
 def _prep_to_32k(audio_input, take_last_seconds: float | None = None, device: torch.device = UTILITY_DEVICE) -> torch.Tensor:
     """Return mono 32k tensor on device; optionally last N seconds only."""
@@ -3055,7 +3085,7 @@ def ui_full(launch_kwargs):
                     return gr.Radio(gpu_opts, value=value, label="", interactive=True)
 
             gr.Markdown("**GPU Selection**")
-            mg_small_gpu = _gpu_row("MusicGen Small", str(STYLE_DEVICE))
+            style_gpu = _gpu_row("Style", str(STYLE_DEVICE))
             mg_large_gpu = _gpu_row("MusicGen Large", str(LARGE_DEVICE))
             ag_gpu = _gpu_row("AudioGen Medium", str(AUDIOGEN_DEVICE))
             audiosr_gpu = _gpu_row("AudioSR", str(AUDIOSR_DEVICE))
@@ -3064,19 +3094,9 @@ def ui_full(launch_kwargs):
             apply_gpu = gr.Button("Apply GPU Assignments")
             gpu_status = gr.Markdown("")
 
-            def _apply_gpus(mg_s, mg_l, ag_d, asr_d, diff_d):
-                global STYLE_DEVICE, LARGE_DEVICE, AUDIOGEN_DEVICE, AUDIOSR_DEVICES, AUDIOSR_DEVICE, DIFFUSION_DEVICE
-                STYLE_DEVICE = torch.device(mg_s)
-                LARGE_DEVICE = torch.device(mg_l)
-                AUDIOGEN_DEVICE = torch.device(ag_d)
-                AUDIOSR_DEVICES = [torch.device(asr_d)]
-                AUDIOSR_DEVICE = AUDIOSR_DEVICES[0]
-                DIFFUSION_DEVICE = torch.device(diff_d)
-                return "✅ GPU assignments updated"
-
             apply_gpu.click(
                 _apply_gpus,
-                [mg_small_gpu, mg_large_gpu, ag_gpu, audiosr_gpu, diffusion_gpu],
+                [style_gpu, mg_large_gpu, ag_gpu, audiosr_gpu, diffusion_gpu],
                 gpu_status,
             )
 
