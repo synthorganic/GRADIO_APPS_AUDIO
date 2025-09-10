@@ -541,9 +541,14 @@ def _move_musicgen(model, device: torch.device):
 
 
 def _offload_musicgen(model):
-    """Push ``model`` back to CPU and free the current CUDA cache."""
+    """Push ``model`` back to CPU and clear the originating CUDA cache."""
+    if model is None:
+        return
+    prev_dev = getattr(model, "device", None)
     _move_musicgen(model, torch.device("cpu"))
-    torch.cuda.empty_cache()
+    if prev_dev is not None and prev_dev.type == "cuda":
+        with torch.cuda.device(prev_dev):
+            torch.cuda.empty_cache()
 
 
 def _apply_gpus(style_d, mg_l, ag_d, asr_d, diff_d):
@@ -977,8 +982,12 @@ def style_load_diffusion():
 def _offload_style():
     _offload_musicgen(STYLE_MODEL)
     if STYLE_MBD is not None:
+        prev_dev = getattr(STYLE_MBD, "device", None)
         _move_to_device(STYLE_MBD, torch.device("cpu"))
         STYLE_MBD.device = torch.device("cpu")
+        if prev_dev is not None and prev_dev.type == "cuda":
+            with torch.cuda.device(prev_dev):
+                torch.cuda.empty_cache()
 
 
 def medium_load_model():
@@ -1017,58 +1026,66 @@ def style_predict(text, melody, duration=10, topk=200, topp=50.0, temperature=1.
                   out_trim_db=-3.0):
     """Generate with MusicGen-Style, optional melody excerpt."""
     style_load_model()
-    _move_musicgen(STYLE_MODEL, STYLE_DEVICE)
-    STYLE_MODEL.set_generation_params(duration=int(duration),
-                                      top_k=int(topk), top_p=float(topp),
-                                      temperature=float(temperature),
-                                      cfg_coef=float(cfg_coef),
-                                      cfg_coef_beta=float(cfg_coef_beta) if double_cfg == "Yes" else None)
-    STYLE_MODEL.set_style_conditioner_params(eval_q=int(eval_q),
-                                             excerpt_length=float(excerpt_length))
-
-    # Diffusion toggle
-    global STYLE_USE_DIFFUSION
-    if decoder == "MultiBand_Diffusion":
-        STYLE_USE_DIFFUSION = True
-        style_load_diffusion()
-        if STYLE_MBD is not None:
-            _move_to_device(STYLE_MBD, DIFFUSION_DEVICE)
-            STYLE_MBD.device = DIFFUSION_DEVICE
-    else:
-        STYLE_USE_DIFFUSION = False
-
-    melody_tensor = None
-    if melody:
-        sr, arr = melody
-        mel = torch.from_numpy(arr).float().t().to(STYLE_DEVICE)
-        mel = _ensure_2d(mel)
-        mel = convert_audio(mel, sr, TARGET_SR, TARGET_AC).to(STYLE_DEVICE)
-        melody_tensor = [mel]
-
-    if melody_tensor:
-        outputs = STYLE_MODEL.generate_with_chroma(
-            descriptions=[text or "style generation"],
-            melody_wavs=melody_tensor,
-            melody_sample_rate=TARGET_SR,
-            return_tokens=STYLE_USE_DIFFUSION
+    try:
+        _move_musicgen(STYLE_MODEL, STYLE_DEVICE)
+        STYLE_MODEL.set_generation_params(
+            duration=int(duration),
+            top_k=int(topk),
+            top_p=float(topp),
+            temperature=float(temperature),
+            cfg_coef=float(cfg_coef),
+            cfg_coef_beta=float(cfg_coef_beta) if double_cfg == "Yes" else None,
         )
-    else:
-        outputs = STYLE_MODEL.generate([text or "style generation"],
-                                       return_tokens=STYLE_USE_DIFFUSION)
+        STYLE_MODEL.set_style_conditioner_params(
+            eval_q=int(eval_q), excerpt_length=float(excerpt_length)
+        )
 
-    if STYLE_USE_DIFFUSION:
-        tokens = outputs[1]
-        if tokens.device != STYLE_MBD.device:
-            tokens = tokens.to(STYLE_MBD.device)
-        torch.cuda.set_device(STYLE_MBD.device)
-        wavs = STYLE_MBD.tokens_to_wav(tokens)
-        wav = wavs.detach().cpu().float()[0]  # (C,T)
-        sr_out = TARGET_SR
-    else:
-        wav = outputs[0].detach().cpu().float()[0]
-        sr_out = STYLE_MODEL.sample_rate
+        # Diffusion toggle
+        global STYLE_USE_DIFFUSION
+        if decoder == "MultiBand_Diffusion":
+            STYLE_USE_DIFFUSION = True
+            style_load_diffusion()
+            if STYLE_MBD is not None:
+                _move_to_device(STYLE_MBD, DIFFUSION_DEVICE)
+                STYLE_MBD.device = DIFFUSION_DEVICE
+        else:
+            STYLE_USE_DIFFUSION = False
 
-    return _write_wav(wav, sr_out, stem="style", trim_db=float(out_trim_db))
+        melody_tensor = None
+        if melody:
+            sr, arr = melody
+            mel = torch.from_numpy(arr).float().t().to(STYLE_DEVICE)
+            mel = _ensure_2d(mel)
+            mel = convert_audio(mel, sr, TARGET_SR, TARGET_AC).to(STYLE_DEVICE)
+            melody_tensor = [mel]
+
+        if melody_tensor:
+            outputs = STYLE_MODEL.generate_with_chroma(
+                descriptions=[text or "style generation"],
+                melody_wavs=melody_tensor,
+                melody_sample_rate=TARGET_SR,
+                return_tokens=STYLE_USE_DIFFUSION,
+            )
+        else:
+            outputs = STYLE_MODEL.generate(
+                [text or "style generation"], return_tokens=STYLE_USE_DIFFUSION
+            )
+
+        if STYLE_USE_DIFFUSION:
+            tokens = outputs[1]
+            if tokens.device != STYLE_MBD.device:
+                tokens = tokens.to(STYLE_MBD.device)
+            torch.cuda.set_device(STYLE_MBD.device)
+            wavs = STYLE_MBD.tokens_to_wav(tokens)
+            wav = wavs.detach().cpu().float()[0]  # (C,T)
+            sr_out = TARGET_SR
+        else:
+            wav = outputs[0].detach().cpu().float()[0]
+            sr_out = STYLE_MODEL.sample_rate
+
+        return _write_wav(wav, sr_out, stem="style", trim_db=float(out_trim_db))
+    finally:
+        _offload_style()
 
 # ============================================================================
 # AUDIOGEN CONTINUATION TAB [ALTERED]
@@ -1076,9 +1093,9 @@ def style_predict(text, melody, duration=10, topk=200, topp=50.0, temperature=1.
 def audiogen_load_model(name: str = "facebook/audiogen-medium"):
     global AUDIOGEN_MODEL
     if AUDIOGEN_MODEL is None:
-        print(f"[AudioGen] Loading {name} on {AUDIOGEN_DEVICE} ...")
+        print(f"[AudioGen] Loading {name} ...")
         AUDIOGEN_MODEL = AudioGen.get_pretrained(name)
-        AUDIOGEN_MODEL.device = AUDIOGEN_DEVICE
+    _move_musicgen(AUDIOGEN_MODEL, AUDIOGEN_DEVICE)
     return AUDIOGEN_MODEL
 
 def audiogen_continuation(
@@ -1092,7 +1109,7 @@ def audiogen_continuation(
     cfg_coef: float = 3.0,
     crossfade_sec: float = 1.25,   # slightly shorter to avoid hot sums
     out_trim_db: float = -3.0,
-):
+): 
     """Emulate continuation by generating fresh audio and crossfading onto the input tail."""
     if audio_input is None:
         raise gr.Error("Please provide an input audio clip.")
@@ -1105,30 +1122,33 @@ def audiogen_continuation(
 
     # 2) Load and configure AudioGen (cuda:0 per your layout)
     model = audiogen_load_model("facebook/audiogen-medium")
-    model.set_generation_params(
-        duration=int(duration),
-        top_k=int(topk),
-        top_p=float(topp),
-        temperature=float(temperature),
-        cfg_coef=float(cfg_coef),
-    )
+    try:
+        model.set_generation_params(
+            duration=int(duration),
+            top_k=int(topk),
+            top_p=float(topp),
+            temperature=float(temperature),
+            cfg_coef=float(cfg_coef),
+        )
 
-    # 3) Emulate continuation with crossfade
-    print("[AudioGen] Generating new segment for crossfade continuation.")
-    gen_out = model.generate([prompt])             # -> Tensor[B,C,T] or similar
-    gen_batch = _extract_audio_batch(gen_out)
-    gen = gen_batch.detach().cpu().float()[0]      # (C,T)
+        # 3) Emulate continuation with crossfade
+        print("[AudioGen] Generating new segment for crossfade continuation.")
+        gen_out = model.generate([prompt])             # -> Tensor[B,C,T] or similar
+        gen_batch = _extract_audio_batch(gen_out)
+        gen = gen_batch.detach().cpu().float()[0]      # (C,T)
 
-    if _rms(gen) < 1e-6:
-        raise gr.Error("Generated segment is near-silent. Try a richer prompt or higher temperature/top_k.")
+        if _rms(gen) < 1e-6:
+            raise gr.Error("Generated segment is near-silent. Try a richer prompt or higher temperature/top_k.")
 
-    tail_cpu = tail.detach().cpu().float()
-    gen_cpu  = gen.detach().cpu().float()
+        tail_cpu = tail.detach().cpu().float()
+        gen_cpu  = gen.detach().cpu().float()
 
-    xf = float(max(0.25, min(crossfade_sec, lookback_sec * 0.5, 3.0)))
-    glued = _crossfade_concat(tail_cpu, gen_cpu, sr=TARGET_SR, xf_sec=xf)  # (C, T)
+        xf = float(max(0.25, min(crossfade_sec, lookback_sec * 0.5, 3.0)))
+        glued = _crossfade_concat(tail_cpu, gen_cpu, sr=TARGET_SR, xf_sec=xf)  # (C, T)
 
-    return _write_wav(glued, TARGET_SR, stem="audiogen_emul", trim_db=float(out_trim_db))
+        return _write_wav(glued, TARGET_SR, stem="audiogen_emul", trim_db=float(out_trim_db))
+    finally:
+        _offload_musicgen(model)
 
 
 def melody_continuation(
@@ -1150,29 +1170,33 @@ def melody_continuation(
     prompt = text_prompt or "Continuation"
     lookback_sec = float(max(0.5, min(30.0, lookback_sec)))
     tail = _prep_to_32k(audio_input, take_last_seconds=lookback_sec, device=UTILITY_DEVICE).cpu()
-
     model = melody_load_model()
-    _move_musicgen(model, LARGE_DEVICE)
-    model.set_generation_params(
-        duration=int(duration),
-        top_k=int(topk),
-        top_p=float(topp),
-        temperature=float(temperature),
-        cfg_coef=float(cfg_coef),
-    )
+    try:
+        _move_musicgen(model, LARGE_DEVICE)
+        model.set_generation_params(
+            duration=int(duration),
+            top_k=int(topk),
+            top_p=float(topp),
+            temperature=float(temperature),
+            cfg_coef=float(cfg_coef),
+        )
 
-    gen_out = model.generate_with_chroma(
-        [prompt], melody_wavs=[tail], melody_sample_rate=TARGET_SR
-    )
-    gen = _extract_audio_batch(gen_out).detach().cpu().float()[0]
+        gen_out = model.generate_with_chroma(
+            [prompt], melody_wavs=[tail], melody_sample_rate=TARGET_SR
+        )
+        gen = _extract_audio_batch(gen_out).detach().cpu().float()[0]
 
-    if _rms(gen) < 1e-6:
-        raise gr.Error("Generated segment is near-silent. Try a richer prompt or higher temperature/top_k.")
+        if _rms(gen) < 1e-6:
+            raise gr.Error(
+                "Generated segment is near-silent. Try a richer prompt or higher temperature/top_k."
+            )
 
-    tail_cpu = tail.detach().cpu().float()
-    xf = float(max(0.25, min(crossfade_sec, lookback_sec * 0.5, 3.0)))
-    glued = _crossfade_concat(tail_cpu, gen, sr=TARGET_SR, xf_sec=xf)
-    return _write_wav(glued, TARGET_SR, stem="melody_emul", trim_db=float(out_trim_db))
+        tail_cpu = tail.detach().cpu().float()
+        xf = float(max(0.25, min(crossfade_sec, lookback_sec * 0.5, 3.0)))
+        glued = _crossfade_concat(tail_cpu, gen, sr=TARGET_SR, xf_sec=xf)
+        return _write_wav(glued, TARGET_SR, stem="melody_emul", trim_db=float(out_trim_db))
+    finally:
+        _offload_musicgen(model)
 
 
 def melody_generate_transition(intro_audio, prompt, duration, out_trim_db):
@@ -1181,13 +1205,16 @@ def melody_generate_transition(intro_audio, prompt, duration, out_trim_db):
         raise gr.Error("Please provide intro audio.")
     mel = _prep_to_32k(intro_audio).cpu()
     model = melody_load_model()
-    _move_musicgen(model, LARGE_DEVICE)
-    model.set_generation_params(duration=int(duration))
-    out = model.generate_with_chroma(
-        [prompt], melody_wavs=[mel], melody_sample_rate=TARGET_SR
-    )
-    gen = _extract_audio_batch(out)[0]
-    return _write_wav(gen, TARGET_SR, stem="melody_trans", trim_db=float(out_trim_db))
+    try:
+        _move_musicgen(model, LARGE_DEVICE)
+        model.set_generation_params(duration=int(duration))
+        out = model.generate_with_chroma(
+            [prompt], melody_wavs=[mel], melody_sample_rate=TARGET_SR
+        )
+        gen = _extract_audio_batch(out)[0]
+        return _write_wav(gen, TARGET_SR, stem="melody_trans", trim_db=float(out_trim_db))
+    finally:
+        _offload_musicgen(model)
 
 
 def continuation(
