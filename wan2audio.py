@@ -1,10 +1,16 @@
+import logging
 import os
 import random
 
 try:
     import librosa  # type: ignore
+    from librosa.util.exceptions import ParameterError
 except Exception:  # pragma: no cover - optional dependency
     librosa = None
+
+    class ParameterError(Exception):
+        """Fallback ParameterError when librosa is unavailable."""
+        pass
 
 WORDS = [
     "ambient", "bouncy", "calm", "digital", "echoing",
@@ -32,7 +38,14 @@ def _detect_key_bpm(path: str) -> tuple[str, float]:
         key_idx = chroma.mean(axis=1).argmax()
         key = KEYS[int(key_idx) % 12]
         return key, float(tempo)
-    except Exception:
+    except ParameterError as exc:  # type: ignore[misc]
+        logging.warning(str(exc))
+        return "C", 120.0
+    except IOError as exc:
+        logging.warning(str(exc))
+        return "C", 120.0
+    except Exception as exc:  # pragma: no cover - unexpected errors
+        logging.warning(str(exc))
         return "C", 120.0
 
 
