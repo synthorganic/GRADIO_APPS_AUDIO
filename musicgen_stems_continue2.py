@@ -23,6 +23,7 @@ import re
 import numpy as np
 import types
 from typing import Iterable
+from contextlib import contextmanager
 from prompt_notebook import save_prompt, show_notebook, load_prompt
 
 try:  # pragma: no cover - optional runtime dependency
@@ -35,6 +36,22 @@ except Exception:  # pragma: no cover - allow import without scipy
 try:
     import torch
     import torch.nn.functional as F
+    # Enable fast attention and TF32/FP16 matmuls when running on CUDA to
+    # recover the throughput seen in the demo build.
+    if torch.cuda.is_available():  # pragma: no cover - depends on runtime
+        try:
+            torch.backends.cuda.matmul.allow_tf32 = True
+            torch.set_float32_matmul_precision("high")
+            if hasattr(torch.backends.cuda, "sdp_kernel"):
+                torch.backends.cuda.sdp_kernel(
+                    enable_flash_sdp=True,
+                    enable_mem_efficient=True,
+                    enable_math=False,
+                )
+            if hasattr(torch.backends, "cudnn"):
+                torch.backends.cudnn.benchmark = True
+        except Exception:
+            pass
 except Exception:  # pragma: no cover - allow import without torch
     torch = types.SimpleNamespace(
         nn=types.SimpleNamespace(Module=object, Parameter=lambda *a, **k: None),
@@ -410,7 +427,8 @@ def generate_sharded(prompts, models):
         if not batch:
             continue
         if hasattr(model, "generate"):
-            gen = model.generate(batch)
+            with _no_grad():
+                gen = model.generate(batch)
         else:  # pragma: no cover - placeholder path
             gen = [None] * len(batch)
         outputs.extend(gen)
@@ -436,6 +454,19 @@ def _rms(x: torch.Tensor) -> float:
 def _db_to_amp(db: float) -> float:
     """Convert decibel gain to linear amplitude."""
     return 10 ** (db / 20.0)
+
+
+@contextmanager
+def _no_grad():
+    """Best effort context manager disabling gradient tracking."""
+    if hasattr(torch, "inference_mode"):
+        with torch.inference_mode():
+            yield
+    elif hasattr(torch, "no_grad"):
+        with torch.no_grad():
+            yield
+    else:  # pragma: no cover - torch stub without no_grad
+        yield
 
 
 def _move_to_device(obj, device: torch.device, _seen: set[int] | None = None):
@@ -826,7 +857,8 @@ def compose_sections(
         best_wav = None
         best_score = -1e9
         for _ in range(int(candidates)):
-            out = model.generate([sec["prompt"]], return_tokens=(decoder == "MultiBand_Diffusion"))
+            with _no_grad():
+                out = model.generate([sec["prompt"]], return_tokens=(decoder == "MultiBand_Diffusion"))
             if decoder == "MultiBand_Diffusion" and STYLE_MBD is not None:
                 tokens = out[1] if isinstance(out, (tuple, list)) and len(out) > 1 else out[0]
                 tokens = tokens.to(STYLE_MBD.device)
@@ -1060,16 +1092,18 @@ def style_predict(text, melody, duration=10, topk=200, topp=50.0, temperature=1.
             melody_tensor = [mel]
 
         if melody_tensor:
-            outputs = STYLE_MODEL.generate_with_chroma(
-                descriptions=[text or "style generation"],
-                melody_wavs=melody_tensor,
-                melody_sample_rate=TARGET_SR,
-                return_tokens=STYLE_USE_DIFFUSION,
-            )
+            with _no_grad():
+                outputs = STYLE_MODEL.generate_with_chroma(
+                    descriptions=[text or "style generation"],
+                    melody_wavs=melody_tensor,
+                    melody_sample_rate=TARGET_SR,
+                    return_tokens=STYLE_USE_DIFFUSION,
+                )
         else:
-            outputs = STYLE_MODEL.generate(
-                [text or "style generation"], return_tokens=STYLE_USE_DIFFUSION
-            )
+            with _no_grad():
+                outputs = STYLE_MODEL.generate(
+                    [text or "style generation"], return_tokens=STYLE_USE_DIFFUSION
+                )
 
         if STYLE_USE_DIFFUSION:
             tokens = outputs[1]
@@ -1133,7 +1167,8 @@ def audiogen_continuation(
 
         # 3) Emulate continuation with crossfade
         print("[AudioGen] Generating new segment for crossfade continuation.")
-        gen_out = model.generate([prompt])             # -> Tensor[B,C,T] or similar
+        with _no_grad():
+            gen_out = model.generate([prompt])             # -> Tensor[B,C,T] or similar
         gen_batch = _extract_audio_batch(gen_out)
         gen = gen_batch.detach().cpu().float()[0]      # (C,T)
 
@@ -1181,9 +1216,10 @@ def melody_continuation(
             cfg_coef=float(cfg_coef),
         )
 
-        gen_out = model.generate_with_chroma(
-            [prompt], melody_wavs=[tail], melody_sample_rate=TARGET_SR
-        )
+        with _no_grad():
+            gen_out = model.generate_with_chroma(
+                [prompt], melody_wavs=[tail], melody_sample_rate=TARGET_SR
+            )
         gen = _extract_audio_batch(gen_out).detach().cpu().float()[0]
 
         if _rms(gen) < 1e-6:
@@ -1208,9 +1244,10 @@ def melody_generate_transition(intro_audio, prompt, duration, out_trim_db):
     try:
         _move_musicgen(model, LARGE_DEVICE)
         model.set_generation_params(duration=int(duration))
-        out = model.generate_with_chroma(
-            [prompt], melody_wavs=[mel], melody_sample_rate=TARGET_SR
-        )
+        with _no_grad():
+            out = model.generate_with_chroma(
+                [prompt], melody_wavs=[mel], melody_sample_rate=TARGET_SR
+            )
         gen = _extract_audio_batch(out)[0]
         return _write_wav(gen, TARGET_SR, stem="melody_trans", trim_db=float(out_trim_db))
     finally:
