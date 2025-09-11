@@ -22,6 +22,7 @@ import tempfile
 import re
 import numpy as np
 import types
+import importlib
 from typing import Iterable
 from contextlib import contextmanager
 from prompt_notebook import save_prompt, show_notebook, load_prompt
@@ -29,12 +30,24 @@ from prompt_notebook import save_prompt, show_notebook, load_prompt
 
 logger = logging.getLogger(__name__)
 
-try:  # pragma: no cover - optional runtime dependency
-    from scipy.signal import cheby1, lfilter
-    SCIPY_AVAILABLE = True
-except Exception:  # pragma: no cover - allow import without scipy
-    cheby1 = lfilter = None
-    SCIPY_AVAILABLE = False
+
+def _optional_import(module: str, attr_map: dict | None = None):
+    """Attempt to import ``module`` returning placeholders when unavailable."""
+    try:
+        mod = importlib.import_module(module)
+        return True, mod
+    except Exception:
+        logger.warning("Optional dependency '%s' is missing", module)
+        if attr_map is None:
+            return False, None
+        return False, types.SimpleNamespace(**attr_map)
+
+
+SCIPY_AVAILABLE, _scipy_signal = _optional_import(
+    "scipy.signal", {"cheby1": None, "lfilter": None}
+)
+cheby1 = getattr(_scipy_signal, "cheby1", None)
+lfilter = getattr(_scipy_signal, "lfilter", None)
 
 try:
     import torch
@@ -66,93 +79,71 @@ except Exception:  # pragma: no cover - allow import without torch
         cuda=types.SimpleNamespace(is_available=lambda: False, device_count=lambda: 0),
     )
     F = types.SimpleNamespace()
-try:
-    import gradio as gr
-except Exception:  # pragma: no cover - allow import without gradio
-    gr = types.SimpleNamespace(Error=Exception)
 
-# ``audiocraft`` is a heavy optional dependency.  Importing this module should
+_, gr = _optional_import("gradio", {"Error": Exception})
+
+# ``audiocraft`` is a heavy optional dependency. Importing this module should
 # not fail if it is missing, so we provide minimal placeholders when the
-# package cannot be imported.  Only a very small subset of the file is used by
+# package cannot be imported. Only a very small subset of the file is used by
 # the tests and the rest of the application will gracefully error if the real
 # implementation is required at runtime.
-try:  # pragma: no cover - optional runtime dependency
-    from audiocraft.data.audio_utils import convert_audio
-    from audiocraft.data.audio import audio_write
-    from audiocraft.models import MusicGen, MultiBandDiffusion, AudioGen
-    AUDIOCRAFT_AVAILABLE = True
-except Exception:  # pragma: no cover - allow import without audiocraft
-    convert_audio = audio_write = MusicGen = MultiBandDiffusion = AudioGen = None
-    AUDIOCRAFT_AVAILABLE = False
+_aud_utils_ok, _aud_utils = _optional_import(
+    "audiocraft.data.audio_utils", {"convert_audio": None}
+)
+_aud_audio_ok, _aud_audio = _optional_import(
+    "audiocraft.data.audio", {"audio_write": None}
+)
+_aud_models_ok, _aud_models = _optional_import(
+    "audiocraft.models",
+    {"MusicGen": None, "MultiBandDiffusion": None, "AudioGen": None},
+)
+AUDIOCRAFT_AVAILABLE = _aud_utils_ok and _aud_audio_ok and _aud_models_ok
+convert_audio = getattr(_aud_utils, "convert_audio", None)
+audio_write = getattr(_aud_audio, "audio_write", None)
+MusicGen = getattr(_aud_models, "MusicGen", None)
+MultiBandDiffusion = getattr(_aud_models, "MultiBandDiffusion", None)
+AudioGen = getattr(_aud_models, "AudioGen", None)
 
 # ---------- Optional deps [UNCHANGED] ----------
-try:
-    import demucs.separate
-    DEMUCS_AVAILABLE = True
-except ImportError:
-    DEMUCS_AVAILABLE = False
+DEMUCS_AVAILABLE, demucs = _optional_import("demucs")
+if DEMUCS_AVAILABLE:
+    importlib.import_module("demucs.separate")
 
-try:
-    import matchering as mg
-    MATCHERING_AVAILABLE = True
-except ImportError:
-    mg = None  # ensure symbol exists for type checkers and wrappers
-    MATCHERING_AVAILABLE = False
+MATCHERING_AVAILABLE, mg = _optional_import("matchering")
 
 # numpy 1.24+ removed aliases like ``np.float`` that older libs still use
 if not hasattr(np, "float"):
     np.float = float  # type: ignore[attr-defined]
 
-try:
-    sys.path.append(str(Path(__file__).resolve().parent / "versatile_audio_super_resolution"))
-    from audiosr import build_model as audiosr_build_model, super_resolution as audiosr_super_resolution
-    AUDIOSR_AVAILABLE = True
-except Exception:
-    AUDIOSR_AVAILABLE = False
+sys.path.append(str(Path(__file__).resolve().parent / "versatile_audio_super_resolution"))
+AUDIOSR_AVAILABLE, _audiosr = _optional_import(
+    "audiosr", {"build_model": None, "super_resolution": None}
+)
+audiosr_build_model = getattr(_audiosr, "build_model", None)
+audiosr_super_resolution = getattr(_audiosr, "super_resolution", None)
 
 # Additional optional deps for stem combination / harmonization features
-try:  # librosa for BPM detection + pitch operations
-    import librosa  # type: ignore
-    LIBROSA_AVAILABLE = True
-except Exception:  # pragma: no cover - optional runtime dep
-    LIBROSA_AVAILABLE = False
+LIBROSA_AVAILABLE, librosa = _optional_import("librosa")
 
-try:  # pedalboard effects (reverb, distortion, gating)
-    from pedalboard import Pedalboard, Reverb, Distortion, NoiseGate  # type: ignore
-    PEDALBOARD_AVAILABLE = True
-except Exception:  # pragma: no cover - optional runtime dep
-    PEDALBOARD_AVAILABLE = False
+PEDALBOARD_AVAILABLE, _pedalboard = _optional_import(
+    "pedalboard",
+    {"Pedalboard": None, "Reverb": None, "Distortion": None, "NoiseGate": None},
+)
+Pedalboard = getattr(_pedalboard, "Pedalboard", None)
+Reverb = getattr(_pedalboard, "Reverb", None)
+Distortion = getattr(_pedalboard, "Distortion", None)
+NoiseGate = getattr(_pedalboard, "NoiseGate", None)
 
-try:  # soundfile for harmonize output writing
-    import soundfile as sf  # type: ignore
-    SOUNDFILE_AVAILABLE = True
-except Exception:  # pragma: no cover - optional runtime dep
-    SOUNDFILE_AVAILABLE = False
+SOUNDFILE_AVAILABLE, sf = _optional_import("soundfile")
 
-try:  # MIDI export for harmonization
-    import mido  # type: ignore
-    MIDO_AVAILABLE = True
-except Exception:  # pragma: no cover - optional runtime dep
-    MIDO_AVAILABLE = False
- 
-try:  # matplotlib for waveform visualization
-    import matplotlib.pyplot as plt  # type: ignore
-    MATPLOTLIB_AVAILABLE = True
-except Exception:  # pragma: no cover - optional runtime dep
-    MATPLOTLIB_AVAILABLE = False
+MIDO_AVAILABLE, mido = _optional_import("mido")
 
-try:  # Retrieval-based Voice Conversion (RVC) library
-    from rvc import VoiceConverter  # type: ignore
-    RVC_AVAILABLE = True
-except Exception:  # pragma: no cover - optional runtime dep
-    VoiceConverter = None  # type: ignore
-    RVC_AVAILABLE = False
+MATPLOTLIB_AVAILABLE, plt = _optional_import("matplotlib.pyplot")
 
-try:  # WAN2Audio for sample analysis
-    import wan2audio  # type: ignore
-    WAN2AUDIO_AVAILABLE = True
-except Exception:  # pragma: no cover - optional runtime dep
-    WAN2AUDIO_AVAILABLE = False
+RVC_AVAILABLE, _rvc = _optional_import("rvc", {"VoiceConverter": None})
+VoiceConverter = getattr(_rvc, "VoiceConverter", None)
+
+WAN2AUDIO_AVAILABLE, wan2audio = _optional_import("wan2audio")
 
 # ---------- Devices [ALTERED] ----------
 # Allow overriding the default GPU placement via environment variables.  Each
