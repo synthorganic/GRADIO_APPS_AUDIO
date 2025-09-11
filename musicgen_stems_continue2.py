@@ -26,6 +26,9 @@ from typing import Iterable
 from contextlib import contextmanager
 from prompt_notebook import save_prompt, show_notebook, load_prompt
 
+
+logger = logging.getLogger(__name__)
+
 try:  # pragma: no cover - optional runtime dependency
     from scipy.signal import cheby1, lfilter
     SCIPY_AVAILABLE = True
@@ -203,7 +206,7 @@ else:
 # First device retained for backward compatibility / logging.
 AUDIOSR_DEVICE = AUDIOSR_DEVICES[0]
 
-print(
+logger.info(
     f"[Boot] STYLE: {STYLE_DEVICE} | MEDIUM: {MEDIUM_DEVICE} | "
     f"LARGE: {LARGE_DEVICE} | AUDIOGEN: {AUDIOGEN_DEVICE} | "
     f"DIFFUSION(MBD): {DIFFUSION_DEVICE} | UTILITY: {UTILITY_DEVICE} | "
@@ -680,7 +683,7 @@ def _write_wav(wav_ct: torch.Tensor, sr: int, stem: str = "out", trim_db: float 
     if fsz <= 0:
         raise gr.Error(f"Internal write error: final file size is {fsz} bytes: {final_path}")
 
-    print(f"[I/O] Wrote WAV: {final_path} ({fsz} bytes)")
+    logger.info(f"[I/O] Wrote WAV: {final_path} ({fsz} bytes)")
     return str(final_path)
 
 # ---------- AudioGen helpers (compat + crossfade) [ALTERED] ----------
@@ -994,14 +997,14 @@ def section_generate_and_combine(
 def style_load_model():
     global STYLE_MODEL
     if STYLE_MODEL is None:
-        print("[Style] Loading facebook/musicgen-style")
+        logger.info("[Style] Loading facebook/musicgen-style")
         STYLE_MODEL = MusicGen.get_pretrained("facebook/musicgen-style")
         _move_musicgen(STYLE_MODEL, torch.device("cpu"))
     
 def style_load_diffusion():
     global STYLE_MBD
     if STYLE_MBD is None:
-        print("[Style] Loading MultiBandDiffusion...")
+        logger.info("[Style] Loading MultiBandDiffusion...")
         STYLE_MBD = MultiBandDiffusion.get_mbd_musicgen()
         # ``MultiBandDiffusion`` isn't a regular ``nn.Module`` so a naive
         # ``.to(device)`` call can leave internal tensors (e.g. quantizer
@@ -1026,7 +1029,7 @@ def medium_load_model():
     """Lazy-load facebook/musicgen-medium on MEDIUM_DEVICE."""
     global MEDIUM_MODEL
     if MEDIUM_MODEL is None:
-        print("[Medium] Loading facebook/musicgen-medium")
+        logger.info("[Medium] Loading facebook/musicgen-medium")
         MEDIUM_MODEL = MusicGen.get_pretrained("facebook/musicgen-medium")
         _move_musicgen(MEDIUM_MODEL, torch.device("cpu"))
     return MEDIUM_MODEL
@@ -1036,7 +1039,7 @@ def large_load_model():
     """Lazy-load facebook/musicgen-large on LARGE_DEVICE."""
     global LARGE_MODEL
     if LARGE_MODEL is None:
-        print("[Large] Loading facebook/musicgen-large")
+        logger.info("[Large] Loading facebook/musicgen-large")
         LARGE_MODEL = MusicGen.get_pretrained("facebook/musicgen-large")
         _move_musicgen(LARGE_MODEL, torch.device("cpu"))
     return LARGE_MODEL
@@ -1046,7 +1049,7 @@ def melody_load_model():
     """Lazy-load facebook/musicgen-melody-large on LARGE_DEVICE."""
     global MELODY_MODEL
     if MELODY_MODEL is None:
-        print("[Melody] Loading facebook/musicgen-melody-large")
+        logger.info("[Melody] Loading facebook/musicgen-melody-large")
         MELODY_MODEL = MusicGen.get_pretrained("facebook/musicgen-melody")
         _move_musicgen(MELODY_MODEL, torch.device("cpu"))
     return MELODY_MODEL
@@ -1127,7 +1130,7 @@ def style_predict(text, melody, duration=10, topk=200, topp=50.0, temperature=1.
 def audiogen_load_model(name: str = "facebook/audiogen-medium"):
     global AUDIOGEN_MODEL
     if AUDIOGEN_MODEL is None:
-        print(f"[AudioGen] Loading {name} ...")
+        logger.info(f"[AudioGen] Loading {name} ...")
         AUDIOGEN_MODEL = AudioGen.get_pretrained(name)
     _move_musicgen(AUDIOGEN_MODEL, AUDIOGEN_DEVICE)
     return AUDIOGEN_MODEL
@@ -1166,7 +1169,7 @@ def audiogen_continuation(
         )
 
         # 3) Emulate continuation with crossfade
-        print("[AudioGen] Generating new segment for crossfade continuation.")
+        logger.info("[AudioGen] Generating new segment for crossfade continuation.")
         with _no_grad():
             gen_out = model.generate([prompt])             # -> Tensor[B,C,T] or similar
         gen_batch = _extract_audio_batch(gen_out)
