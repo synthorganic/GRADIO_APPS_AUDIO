@@ -1,32 +1,52 @@
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState, type CSSProperties } from "react";
 import { ProjectProvider, useProjectStore } from "./state/ProjectStore";
 import { ProjectNavigator } from "./components/ProjectNavigator";
 import { Timeline } from "./components/Timeline";
-import { TransportControls } from "./components/TransportControls";
 import { MasterControls } from "./components/MasterControls";
 import { LiveLooper } from "./components/LiveLooper";
-import { MasteringPanel } from "./components/MasteringPanel";
 import { SampleDetailPanel } from "./components/SampleDetailPanel";
 import { VstRack } from "./components/VstRack";
 import type { SampleClip } from "./types";
 import { theme } from "./theme";
+import { MixerPanel } from "./components/MixerPanel";
+import { audioEngine } from "./lib/audioEngine";
+
+type FloatingPanel = "mixer" | "vst" | "sample";
 
 function AppShell() {
   const { currentProjectId, projects } = useProjectStore();
   const project = projects[currentProjectId];
   const [selectedSampleId, setSelectedSampleId] = useState<string | null>(null);
+  const [activePanel, setActivePanel] = useState<FloatingPanel | null>(null);
 
   const selectedSample = useMemo<SampleClip | null>(() => {
     if (!selectedSampleId) return null;
     return project.samples.find((sample) => sample.id === selectedSampleId) ?? null;
   }, [selectedSampleId, project.samples]);
 
+  useEffect(() => {
+    audioEngine.syncChannelMix(project.channels);
+  }, [project.channels]);
+
+  const panelTitle: Record<FloatingPanel, string> = {
+    mixer: "Mixer",
+    vst: "VST Rack",
+    sample: "Sample Details"
+  };
+
+  const renderPanelContent = () => {
+    if (!activePanel) return null;
+    if (activePanel === "mixer") return <MixerPanel project={project} />;
+    if (activePanel === "vst") return <VstRack project={project} targetSample={selectedSample} />;
+    return <SampleDetailPanel sample={selectedSample} />;
+  };
+
   return (
     <div
       style={{
         display: "grid",
-        gridTemplateColumns: "320px 1fr 360px",
-        gridTemplateRows: "auto 1fr auto",
+        gridTemplateColumns: "240px 1fr",
+        gridTemplateRows: "auto 1fr",
         minHeight: "100vh",
         background: theme.background,
         color: theme.text,
@@ -46,39 +66,63 @@ function AppShell() {
       />
       <header
         style={{
-          gridColumn: "1 / span 3",
-          padding: "18px 24px",
+          gridColumn: "1 / span 2",
+          padding: "12px 18px",
           display: "flex",
           justifyContent: "space-between",
           alignItems: "center",
+          gap: "12px",
           borderBottom: `1px solid ${theme.border}`,
           background: theme.surfaceRaised,
           boxShadow: theme.shadow,
           position: "relative",
-          zIndex: 1
+          zIndex: 2
         }}
       >
         <h1
           style={{
             margin: 0,
-            fontSize: "1.75rem",
-            letterSpacing: "0.08em",
+            fontSize: "1.3rem",
+            letterSpacing: "0.06em",
             textTransform: "uppercase",
             color: theme.text
           }}
         >
           Chromatic Collage Lab
         </h1>
-        <MasterControls project={project} />
+        <div style={{ display: "flex", alignItems: "center", gap: "10px" }}>
+          <MasterControls project={project} />
+          <div style={{ display: "flex", gap: "6px" }}>
+            <button type="button" onClick={() => setActivePanel("mixer")} style={toolbarButtonStyle}>
+              Mixer
+            </button>
+            <button type="button" onClick={() => setActivePanel("vst")} style={toolbarButtonStyle}>
+              VST
+            </button>
+            <button
+              type="button"
+              disabled={!selectedSample}
+              onClick={() => selectedSample && setActivePanel("sample")}
+              style={{
+                ...toolbarButtonStyle,
+                opacity: selectedSample ? 1 : 0.4,
+                cursor: selectedSample ? "pointer" : "not-allowed"
+              }}
+            >
+              Sample
+            </button>
+          </div>
+        </div>
       </header>
 
       <aside
         style={{
-          gridRow: "2 / span 2",
+          gridRow: "2 / span 1",
           background: theme.surface,
           borderRight: `1px solid ${theme.border}`,
           display: "flex",
           flexDirection: "column",
+          paddingBottom: "12px",
           position: "relative",
           zIndex: 1
         }}
@@ -90,40 +134,100 @@ function AppShell() {
       <main
         style={{
           gridColumn: "2 / span 1",
-          padding: "18px 24px",
+          padding: "14px 18px",
           display: "flex",
           flexDirection: "column",
-          gap: "14px",
+          gap: "12px",
           position: "relative",
           zIndex: 1
         }}
       >
-        <Timeline project={project} onSelectSample={setSelectedSampleId} selectedSampleId={selectedSampleId} />
-        <TransportControls project={project} />
+        <Timeline
+          project={project}
+          onSelectSample={setSelectedSampleId}
+          selectedSampleId={selectedSampleId}
+        />
       </main>
 
-      <aside
-        style={{
-          gridColumn: "3 / span 1",
-          gridRow: "2 / span 2",
-          padding: "18px 22px",
-          background: theme.surface,
-          borderLeft: `1px solid ${theme.border}`,
-          display: "flex",
-          flexDirection: "column",
-          gap: "16px",
-          overflowY: "auto",
-          position: "relative",
-          zIndex: 1
-        }}
-      >
-        <MasteringPanel project={project} />
-        <VstRack project={project} targetSample={selectedSample} />
-        <SampleDetailPanel sample={selectedSample} />
-      </aside>
+      {activePanel && (
+        <div
+          role="dialog"
+          aria-modal="true"
+          style={{
+            position: "fixed",
+            inset: 0,
+            background: "rgba(7, 10, 18, 0.78)",
+            backdropFilter: "blur(6px)",
+            display: "flex",
+            justifyContent: "center",
+            alignItems: "flex-start",
+            padding: "64px 24px 24px",
+            zIndex: 20
+          }}
+          onClick={() => setActivePanel(null)}
+        >
+          <div
+            style={{
+              width: "min(960px, 96vw)",
+              maxHeight: "80vh",
+              overflow: "hidden",
+              background: theme.surfaceRaised,
+              borderRadius: "16px",
+              border: `1px solid ${theme.border}`,
+              boxShadow: theme.shadow,
+              display: "flex",
+              flexDirection: "column"
+            }}
+            onClick={(event) => event.stopPropagation()}
+          >
+            <div
+              style={{
+                display: "flex",
+                justifyContent: "space-between",
+                alignItems: "center",
+                padding: "10px 16px",
+                borderBottom: `1px solid ${theme.border}`,
+                background: theme.surface
+              }}
+            >
+              <strong style={{ fontSize: "0.85rem", letterSpacing: "0.05em" }}>
+                {panelTitle[activePanel]}
+              </strong>
+              <button
+                type="button"
+                onClick={() => setActivePanel(null)}
+                style={{
+                  border: `1px solid ${theme.button.outline}`,
+                  background: theme.button.base,
+                  color: theme.text,
+                  borderRadius: "999px",
+                  padding: "4px 10px",
+                  fontSize: "0.7rem",
+                  cursor: "pointer"
+                }}
+              >
+                Close
+              </button>
+            </div>
+            <div style={{ padding: "14px 16px", overflowY: "auto" }}>{renderPanelContent()}</div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }
+
+const toolbarButtonStyle: CSSProperties = {
+  border: `1px solid ${theme.button.outline}`,
+  background: theme.button.base,
+  color: theme.text,
+  borderRadius: "999px",
+  padding: "4px 12px",
+  fontSize: "0.7rem",
+  textTransform: "uppercase",
+  letterSpacing: "0.06em",
+  cursor: "pointer"
+};
 
 export default function App() {
   return (

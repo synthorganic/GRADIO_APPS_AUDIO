@@ -107,6 +107,52 @@ export interface TrackEffects {
   vst: VstRoutingSettings;
 }
 
+export type ChannelType = "audio" | "automation" | "midi";
+
+export interface AutomationPoint {
+  id: string;
+  time: number;
+  value: number;
+}
+
+export interface MidiNote {
+  id: string;
+  start: number;
+  length: number;
+  pitch: number;
+  velocity: number;
+  sampleId?: string;
+}
+
+export interface TimelineChannelBase {
+  id: string;
+  name: string;
+  type: ChannelType;
+  color: string;
+  isFxEnabled: boolean;
+  volume: number;
+  pan: number;
+}
+
+export interface AudioChannel extends TimelineChannelBase {
+  type: "audio";
+}
+
+export interface AutomationChannel extends TimelineChannelBase {
+  type: "automation";
+  parameterId: string;
+  parameterLabel: string;
+  points: AutomationPoint[];
+}
+
+export interface MidiChannel extends TimelineChannelBase {
+  type: "midi";
+  instrument: string;
+  notes: MidiNote[];
+}
+
+export type TimelineChannel = AudioChannel | AutomationChannel | MidiChannel;
+
 export interface SampleClip {
   id: string;
   name: string;
@@ -128,6 +174,7 @@ export interface SampleClip {
   rekeyedAt?: string;
   effects: TrackEffects;
   isInTimeline?: boolean;
+  channelId?: string;
 }
 
 export interface Beat {
@@ -143,6 +190,7 @@ export interface Project {
   name: string;
   masterBpm: number;
   samples: SampleClip[];
+  channels: TimelineChannel[];
   mastering: MasteringSettings;
 }
 

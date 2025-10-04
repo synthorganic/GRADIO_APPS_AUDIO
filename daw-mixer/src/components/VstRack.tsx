@@ -35,23 +35,22 @@ export function VstRack({ project, targetSample }: VstRackProps) {
   return (
     <div
       style={{
-        padding: "16px",
-        borderRadius: "16px",
+        padding: "14px",
+        borderRadius: "12px",
         background: theme.surfaceOverlay,
         border: `1px solid ${theme.border}`,
-        boxShadow: theme.cardGlow,
         display: "flex",
         flexDirection: "column",
-        gap: "12px",
+        gap: "10px",
         color: theme.text
       }}
     >
-      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: "8px" }}>
         <div>
-          <h2 style={{ margin: 0, fontSize: "1.05rem", textTransform: "uppercase", letterSpacing: "0.06em" }}>
+          <h2 style={{ margin: 0, fontSize: "0.85rem", textTransform: "uppercase", letterSpacing: "0.06em" }}>
             VST Rack
           </h2>
-          <p style={{ margin: 0, fontSize: "0.75rem", color: theme.textMuted }}>
+          <p style={{ margin: 0, fontSize: "0.68rem", color: theme.textMuted }}>
             Drop WebAssembly VSTs or effect presets to extend your collage toolkit.
           </p>
         </div>
@@ -60,11 +59,12 @@ export function VstRack({ project, targetSample }: VstRackProps) {
           onClick={() => fileInputRef.current?.click()}
           style={{
             border: `1px solid ${theme.button.outline}`,
-            padding: "8px 12px",
-            borderRadius: "10px",
+            padding: "6px 10px",
+            borderRadius: "8px",
             background: theme.button.primary,
             color: theme.button.primaryText,
             fontWeight: 600,
+            fontSize: "0.7rem",
             cursor: "pointer",
             boxShadow: theme.cardGlow
           }}
@@ -83,19 +83,19 @@ export function VstRack({ project, targetSample }: VstRackProps) {
           }}
         />
       </div>
-      <div style={{ fontSize: "0.8rem", color: theme.textMuted }}>
+      <div style={{ fontSize: "0.7rem", color: theme.textMuted }}>
         Target: {targetSample ? targetSample.name : project.name}
       </div>
       {plugins.length === 0 ? (
-        <p style={{ margin: 0, fontSize: "0.85rem", color: theme.textMuted }}>
+        <p style={{ margin: 0, fontSize: "0.7rem", color: theme.textMuted }}>
           No VSTs loaded yet. Import compatible WASM or preset files to chain them after the mastering rack.
         </p>
       ) : (
-        <ul style={{ margin: 0, paddingLeft: "18px", display: "grid", gap: "6px" }}>
+        <ul style={{ margin: 0, paddingLeft: "18px", display: "grid", gap: "4px" }}>
           {plugins.map((plugin) => (
-            <li key={plugin.id} style={{ fontSize: "0.85rem" }}>
+            <li key={plugin.id} style={{ fontSize: "0.72rem" }}>
               <strong>{plugin.name}</strong> — {plugin.type} ({plugin.fileName})
-              <div style={{ fontSize: "0.75rem", color: theme.textMuted }}>
+              <div style={{ fontSize: "0.65rem", color: theme.textMuted }}>
                 Loaded {plugin.loadedAt.toLocaleTimeString()} · Routed to {targetSample ? targetSample.name : "master"}
               </div>
             </li>

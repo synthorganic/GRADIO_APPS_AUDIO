@@ -12,14 +12,14 @@ export function MasterControls({ project }: MasterControlsProps) {
   const [bpm, setBpm] = useState(project.masterBpm);
 
   return (
-    <div style={{ display: "flex", alignItems: "center", gap: "16px" }}>
+    <div style={{ display: "flex", alignItems: "center", gap: "12px" }}>
       <label
         style={{
           display: "flex",
           flexDirection: "column",
-          fontSize: "0.75rem",
+          fontSize: "0.65rem",
           textTransform: "uppercase",
-          letterSpacing: "0.08em",
+          letterSpacing: "0.06em",
           color: theme.text
         }}
       >
@@ -27,7 +27,14 @@ export function MasterControls({ project }: MasterControlsProps) {
         <input
           type="number"
           value={bpm}
-          onChange={(event) => setBpm(Number(event.target.value))}
+          onChange={(event) => {
+            const value = Number(event.target.value);
+            setBpm(value);
+            dispatch({
+              type: "register-control-change",
+              target: { id: "master-bpm", label: "Master BPM", value, unit: "BPM" },
+            });
+          }}
           onBlur={() =>
             dispatch({
               type: "set-project",
@@ -36,11 +43,11 @@ export function MasterControls({ project }: MasterControlsProps) {
           }
           style={{
             marginTop: "4px",
-            padding: "8px 12px",
-            borderRadius: "10px",
+            padding: "6px 8px",
+            borderRadius: "8px",
             border: `1px solid ${theme.border}`,
-            fontSize: "1rem",
-            width: "100px",
+            fontSize: "0.85rem",
+            width: "78px",
             background: theme.surfaceOverlay,
             color: theme.text
           }}
@@ -50,15 +57,15 @@ export function MasterControls({ project }: MasterControlsProps) {
         type="button"
         style={{
           border: `1px solid ${theme.button.outline}`,
-          padding: "10px 16px",
+          padding: "6px 12px",
           borderRadius: "999px",
           background: theme.button.primary,
           color: theme.button.primaryText,
-          fontWeight: 700,
+          fontWeight: 600,
+          fontSize: "0.7rem",
           cursor: "pointer",
           textTransform: "uppercase",
-          letterSpacing: "0.08em",
-          boxShadow: theme.cardGlow
+          letterSpacing: "0.06em"
         }}
         onClick={() => {
           dispatch({

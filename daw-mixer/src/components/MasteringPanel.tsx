@@ -42,40 +42,54 @@ const masteringDescriptors: Array<{
 
 interface MasteringPanelProps {
   project: Project;
+  variant?: "card" | "inline";
 }
 
-export function MasteringPanel({ project }: MasteringPanelProps) {
+export function MasteringPanel({ project, variant = "card" }: MasteringPanelProps) {
   const { dispatch, currentProjectId } = useProjectStore();
+  const isInline = variant === "inline";
 
   return (
     <div
       style={{
-        padding: "16px",
-        borderRadius: "16px",
+        padding: isInline ? "12px 14px" : "16px",
+        borderRadius: isInline ? "12px" : "16px",
         background: theme.surfaceOverlay,
         border: `1px solid ${theme.border}`,
-        boxShadow: theme.cardGlow,
+        boxShadow: isInline ? "none" : theme.cardGlow,
         display: "flex",
         flexDirection: "column",
-        gap: "16px",
+        gap: isInline ? "12px" : "16px",
         color: theme.text
       }}
     >
       <div>
-        <h2 style={{ margin: 0, fontSize: "1.1rem", textTransform: "uppercase", letterSpacing: "0.06em" }}>
+        <h2
+          style={{
+            margin: 0,
+            fontSize: isInline ? "0.9rem" : "1.1rem",
+            textTransform: "uppercase",
+            letterSpacing: "0.06em"
+          }}
+        >
           Mastering Rack
         </h2>
-        <p style={{ margin: 0, fontSize: "0.8rem", color: theme.textMuted }}>
+        <p style={{ margin: 0, fontSize: isInline ? "0.7rem" : "0.8rem", color: theme.textMuted }}>
           Borrowed from the mastering tab: automate width, glue, tonal tilt, limiting, and saturation.
         </p>
       </div>
       {masteringDescriptors.map((item) => (
-        <label key={item.key} style={{ display: "flex", flexDirection: "column", gap: "6px" }}>
+        <label
+          key={item.key}
+          style={{ display: "flex", flexDirection: "column", gap: isInline ? "4px" : "6px" }}
+        >
           <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
-            <span style={{ fontWeight: 600 }}>{item.label}</span>
-            <span style={{ fontSize: "0.8rem", color: theme.textMuted }}>{project.mastering[item.key].toFixed(2)}</span>
+            <span style={{ fontWeight: 600, fontSize: "0.75rem" }}>{item.label}</span>
+            <span style={{ fontSize: "0.7rem", color: theme.textMuted }}>
+              {project.mastering[item.key].toFixed(2)}
+            </span>
           </div>
-          <div style={{ fontSize: "0.75rem", color: theme.textMuted }}>{item.description}</div>
+          <div style={{ fontSize: "0.68rem", color: theme.textMuted }}>{item.description}</div>
           <input
             type="range"
             min={item.key === "limiterCeiling" ? -2 : 0}
@@ -89,12 +103,7 @@ export function MasteringPanel({ project }: MasteringPanelProps) {
                 payload: { [item.key]: Number(event.target.value) }
               })
             }
-            style={{
-              accentColor: undefined,
-              background: item.accent,
-              height: "6px",
-              borderRadius: "999px"
-            }}
+            style={{ accentColor: undefined, background: item.accent, height: "4px", borderRadius: "999px" }}
           />
         </label>
       ))}
@@ -102,13 +111,14 @@ export function MasteringPanel({ project }: MasteringPanelProps) {
         type="button"
         style={{
           border: `1px solid ${theme.button.outline}`,
-          padding: "12px 16px",
+          padding: isInline ? "8px 12px" : "12px 16px",
           borderRadius: "999px",
           background: theme.button.primary,
           color: theme.button.primaryText,
           fontWeight: 700,
+          fontSize: "0.75rem",
           cursor: "pointer",
-          boxShadow: theme.cardGlow
+          boxShadow: isInline ? "none" : theme.cardGlow
         }}
         onClick={() => {
           const blob = new Blob([JSON.stringify(project, null, 2)], { type: "application/json" });
