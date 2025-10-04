@@ -6,7 +6,8 @@
   "scripts": {
     "dev": "vite",
     "build": "tsc && vite build",
-    "preview": "vite preview"
+    "preview": "vite preview",
+    "quick": "sh -c 'if [ -d dist ]; then npm run preview; else npm run build && npm run preview; fi'"
   },
   "dependencies": {
     "@radix-ui/react-slider": "^1.1.1",

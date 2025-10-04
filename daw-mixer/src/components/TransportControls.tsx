@@ -1,4 +1,4 @@
-import { useState, type CSSProperties } from "react";
+import { useEffect, useState, type CSSProperties } from "react";
 import { audioEngine } from "../lib/audioEngine";
 import type { Project } from "../types";
 import { theme } from "../theme";
@@ -11,6 +11,17 @@ export function TransportControls({ project }: TransportControlsProps) {
   const [volume, setVolume] = useState(0.9);
   const [isPlaying, setIsPlaying] = useState(false);
   const [isRendering, setIsRendering] = useState(false);
+
+  useEffect(() => {
+    const handlePlay = () => setIsPlaying(true);
+    const handleStop = () => setIsPlaying(false);
+    window.addEventListener("audio-play", handlePlay);
+    window.addEventListener("audio-stop", handleStop);
+    return () => {
+      window.removeEventListener("audio-play", handlePlay);
+      window.removeEventListener("audio-stop", handleStop);
+    };
+  }, []);
 
   return (
     <div
@@ -31,7 +42,6 @@ export function TransportControls({ project }: TransportControlsProps) {
           type="button"
           onClick={() => {
             audioEngine.stop();
-            setIsPlaying(false);
           }}
           style={buttonStyle}
         >
@@ -42,12 +52,14 @@ export function TransportControls({ project }: TransportControlsProps) {
           onClick={() => {
             if (isPlaying) {
               audioEngine.stop();
-              setIsPlaying(false);
             } else {
-              const firstSample = project.samples[0];
+              const firstSample = [...project.samples].sort(
+                (a, b) => a.position - b.position
+              )[0];
               if (firstSample) {
-                void audioEngine.play(firstSample, firstSample.measures);
-                setIsPlaying(true);
+                void audioEngine.play(firstSample, firstSample.measures, {
+                  timelineOffset: firstSample.position
+                });
               }
             }
           }}

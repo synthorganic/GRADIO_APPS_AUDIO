@@ -29,6 +29,82 @@ export interface Measure {
   detectedPitch?: string;
   tunedPitch?: string;
   energy?: number;
+  beats?: Beat[];
+}
+
+export interface GlitchEffectSettings {
+  enabled: boolean;
+  mix: number;
+  density: number;
+  scatter: number;
+}
+
+export interface GateEffectSettings {
+  enabled: boolean;
+  mix: number;
+  rate: "1/4" | "1/8" | "1/16" | "1/32";
+  swing: number;
+}
+
+export interface SlicerEffectSettings {
+  enabled: boolean;
+  mix: number;
+  division: "1/2" | "1/4" | "1/8" | "1/16";
+  jitter: number;
+}
+
+export interface BitcrushEffectSettings {
+  enabled: boolean;
+  mix: number;
+  depth: number;
+  downsample: number;
+}
+
+export interface ReverbEffectSettings {
+  enabled: boolean;
+  mix: number;
+  size: number;
+  decay: number;
+}
+
+export interface DelayEffectSettings {
+  enabled: boolean;
+  mix: number;
+  time: "1/8" | "1/4" | "1/2" | "1";
+  feedback: number;
+}
+
+export interface ChorusEffectSettings {
+  enabled: boolean;
+  mix: number;
+  rate: number;
+  depth: number;
+}
+
+export interface FilterEffectSettings {
+  enabled: boolean;
+  mix: number;
+  cutoff: number;
+  resonance: number;
+}
+
+export interface VstRoutingSettings {
+  enabled: boolean;
+  pluginName: string;
+  notes?: string;
+}
+
+export interface TrackEffects {
+  glitch: GlitchEffectSettings;
+  rhythmicGate: GateEffectSettings;
+  slicer: SlicerEffectSettings;
+  bitcrush: BitcrushEffectSettings;
+  reverb: ReverbEffectSettings;
+  delay: DelayEffectSettings;
+  chorus: ChorusEffectSettings;
+  hiPass: FilterEffectSettings;
+  lowPass: FilterEffectSettings;
+  vst: VstRoutingSettings;
 }
 
 export interface SampleClip {
@@ -50,6 +126,15 @@ export interface SampleClip {
   variantLabel?: string;
   retuneMap?: string[];
   rekeyedAt?: string;
+  effects: TrackEffects;
+}
+
+export interface Beat {
+  id: string;
+  start: number;
+  end: number;
+  index: number;
+  stems: StemInfo[];
 }
 
 export interface Project {

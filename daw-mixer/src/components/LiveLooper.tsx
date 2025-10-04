@@ -1,8 +1,9 @@
 import { useState } from "react";
-import type { Project } from "../types";
+import type { Project, SampleClip } from "../types";
 import { nanoid } from "nanoid";
 import { useProjectStore } from "../state/ProjectStore";
 import { theme } from "../theme";
+import { createDefaultTrackEffects } from "../lib/effectPresets";
 
 interface LiveLooperProps {
   project: Project;
@@ -18,7 +19,7 @@ export function LiveLooper({ project }: LiveLooperProps) {
     setTimeout(() => {
       const now = Date.now();
       const fakeFile = new File([""], `Live-${now}.wav`, { type: "audio/wav" });
-      const sample = {
+      const sample: SampleClip = {
         id: nanoid(),
         name: `Live take ${project.samples.length + 1}`,
         file: fakeFile,
@@ -35,7 +36,8 @@ export function LiveLooper({ project }: LiveLooperProps) {
         stems: [],
         position: project.samples.length * (60 / project.masterBpm * 4),
         length: loopLength * (60 / project.masterBpm * 4),
-        isLooping: true
+        isLooping: true,
+        effects: createDefaultTrackEffects()
       };
       dispatch({ type: "add-sample", projectId: currentProjectId, sample });
       setIsArmed(false);
