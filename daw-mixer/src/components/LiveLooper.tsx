@@ -19,6 +19,7 @@ export function LiveLooper({ project }: LiveLooperProps) {
     setTimeout(() => {
       const now = Date.now();
       const fakeFile = new File([""], `Live-${now}.wav`, { type: "audio/wav" });
+      const defaultChannelId = project.channels.find((channel) => channel.type === "audio")?.id;
       const sample: SampleClip = {
         id: nanoid(),
         name: `Live take ${project.samples.length + 1}`,
@@ -38,7 +39,8 @@ export function LiveLooper({ project }: LiveLooperProps) {
         length: loopLength * (60 / project.masterBpm * 4),
         isLooping: true,
         effects: createDefaultTrackEffects(),
-        isInTimeline: true
+        isInTimeline: true,
+        channelId: defaultChannelId
       };
       dispatch({ type: "add-sample", projectId: currentProjectId, sample });
       setIsArmed(false);
@@ -48,22 +50,22 @@ export function LiveLooper({ project }: LiveLooperProps) {
   return (
     <div
       style={{
-        padding: "16px 20px",
+        padding: "10px 14px",
         borderTop: `1px solid ${theme.divider}`,
         background: theme.surfaceOverlay,
         display: "flex",
         flexDirection: "column",
-        gap: "12px",
+        gap: "8px",
         color: theme.text
       }}
     >
-      <h3 style={{ margin: 0, fontSize: "1rem", textTransform: "uppercase", letterSpacing: "0.06em" }}>
+      <h3 style={{ margin: 0, fontSize: "0.85rem", textTransform: "uppercase", letterSpacing: "0.06em" }}>
         Live Looper
       </h3>
-      <p style={{ margin: 0, fontSize: "0.8rem", color: theme.textMuted }}>
+      <p style={{ margin: 0, fontSize: "0.68rem", color: theme.textMuted }}>
         Arm recording to capture the next downbeat. Perfect for layering ideas with Ableton Push style flow.
       </p>
-      <label style={{ fontSize: "0.85rem", color: theme.text }}>
+      <label style={{ fontSize: "0.7rem", color: theme.text }}>
         Loop length (measures)
         <input
           type="number"
@@ -72,11 +74,11 @@ export function LiveLooper({ project }: LiveLooperProps) {
           value={loopLength}
           onChange={(event) => setLoopLength(Number(event.target.value))}
           style={{
-            marginLeft: "8px",
-            padding: "6px 10px",
-            borderRadius: "10px",
+            marginLeft: "6px",
+            padding: "4px 8px",
+            borderRadius: "8px",
             border: `1px solid ${theme.border}`,
-            width: "80px",
+            width: "64px",
             background: theme.surface,
             color: theme.text
           }}
@@ -88,13 +90,14 @@ export function LiveLooper({ project }: LiveLooperProps) {
         disabled={isArmed}
         style={{
           border: `1px solid ${theme.button.outline}`,
-          padding: "12px 16px",
+          padding: "8px 12px",
           borderRadius: "999px",
           background: isArmed ? theme.button.base : theme.button.primary,
           color: isArmed ? theme.text : theme.button.primaryText,
-          fontWeight: 700,
+          fontWeight: 600,
+          fontSize: "0.7rem",
           cursor: isArmed ? "not-allowed" : "pointer",
-          letterSpacing: "0.08em",
+          letterSpacing: "0.06em",
           textTransform: "uppercase",
           opacity: isArmed ? 0.65 : 1,
           boxShadow: isArmed ? "none" : theme.cardGlow

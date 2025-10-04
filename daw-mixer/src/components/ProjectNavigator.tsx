@@ -80,6 +80,7 @@ export function ProjectNavigator({ selectedSampleId, onSelectSample }: ProjectNa
     async (files: FileList | null) => {
       if (!files?.length) return;
       let indexOffset = 0;
+      const defaultChannelId = project.channels.find((channel) => channel.type === "audio")?.id;
       for (const file of Array.from(files)) {
         const id = nanoid();
         const sample: SampleClip = {
@@ -97,14 +98,15 @@ export function ProjectNavigator({ selectedSampleId, onSelectSample }: ProjectNa
           startOffset: 0,
           isFragment: false,
           effects: createDefaultTrackEffects(),
-          isInTimeline: true
+          isInTimeline: true,
+          channelId: defaultChannelId
         };
         dispatch({ type: "add-sample", projectId: currentProjectId, sample });
         void processSample(sample);
         indexOffset += 1;
       }
     },
-    [currentProjectId, dispatch, processSample, project.samples.length]
+    [currentProjectId, dispatch, processSample, project.channels, project.samples.length]
   );
 
   const handleFileInput = (event: ChangeEvent<HTMLInputElement>) => {
@@ -132,7 +134,7 @@ export function ProjectNavigator({ selectedSampleId, onSelectSample }: ProjectNa
       setPlayingId(null);
       return;
     }
-    await audioEngine.play(sample, sample.measures);
+    await audioEngine.play(sample, sample.measures, { emitTimelineEvents: false });
     setPlayingId(sample.id);
   };
 
@@ -144,7 +146,7 @@ export function ProjectNavigator({ selectedSampleId, onSelectSample }: ProjectNa
       setPlayingId(null);
       return;
     }
-    await audioEngine.playSegment(sample, measure.start, segmentDuration);
+    await audioEngine.playSegment(sample, measure.start, segmentDuration, { emitTimelineEvents: false });
     setPlayingId(measure.id);
   };
 
@@ -240,7 +242,7 @@ export function ProjectNavigator({ selectedSampleId, onSelectSample }: ProjectNa
       setPlayingId(null);
       return;
     }
-    await audioEngine.playStem(sample, stem, sample.measures);
+    await audioEngine.playStem(sample, stem, sample.measures, { emitTimelineEvents: false });
     setPlayingId(stem.id);
   };
 
@@ -252,7 +254,7 @@ export function ProjectNavigator({ selectedSampleId, onSelectSample }: ProjectNa
       setPlayingId(null);
       return;
     }
-    await audioEngine.playSegment(sample, beat.start, duration);
+    await audioEngine.playSegment(sample, beat.start, duration, { emitTimelineEvents: false });
     setPlayingId(beat.id);
   };
 
@@ -261,10 +263,10 @@ export function ProjectNavigator({ selectedSampleId, onSelectSample }: ProjectNa
       style={{
         flex: 1,
         overflow: "hidden",
-        padding: "18px 22px",
+        padding: "12px 16px",
         display: "flex",
         flexDirection: "column",
-        gap: "14px",
+        gap: "10px",
         background: theme.surface,
         borderBottom: `1px solid ${theme.divider}`,
         color: theme.text
@@ -272,9 +274,9 @@ export function ProjectNavigator({ selectedSampleId, onSelectSample }: ProjectNa
     >
       <section
         style={{
-          padding: "18px",
+          padding: "14px",
           border: `1px dashed ${theme.button.outline}`,
-          borderRadius: "14px",
+          borderRadius: "10px",
           textAlign: "center",
           background: theme.surfaceOverlay,
           color: theme.textMuted,
@@ -298,7 +300,7 @@ export function ProjectNavigator({ selectedSampleId, onSelectSample }: ProjectNa
           style={{ display: "none" }}
           onChange={handleFileInput}
         />
-        <p style={{ margin: "0 0 10px", fontWeight: 600, letterSpacing: "0.04em", color: theme.text }}>
+        <p style={{ margin: "0 0 8px", fontWeight: 600, letterSpacing: "0.04em", color: theme.text, fontSize: "0.75rem" }}>
           Drop audio or browse to start a technicolor session
         </p>
         <button
@@ -308,16 +310,17 @@ export function ProjectNavigator({ selectedSampleId, onSelectSample }: ProjectNa
             border: `1px solid ${theme.button.outline}`,
             background: theme.button.primary,
             color: theme.button.primaryText,
-            padding: "10px 20px",
+            padding: "8px 16px",
             borderRadius: "999px",
             fontWeight: 600,
+            fontSize: "0.7rem",
             cursor: "pointer",
             boxShadow: theme.cardGlow
           }}
         >
           Select audio
         </button>
-        <p style={{ margin: "12px 0 0", fontSize: "0.85rem", color: theme.textMuted }}>
+        <p style={{ margin: "10px 0 0", fontSize: "0.72rem", color: theme.textMuted }}>
           Samples auto-stretch to {project.masterBpm} BPM. DEMUCS will unfold stems on demand.
         </p>
         {isProcessing && (
@@ -326,7 +329,7 @@ export function ProjectNavigator({ selectedSampleId, onSelectSample }: ProjectNa
               position: "absolute",
               top: "12px",
               right: "14px",
-              fontSize: "0.75rem",
+              fontSize: "0.65rem",
               color: theme.button.primary
             }}
           >
@@ -338,8 +341,8 @@ export function ProjectNavigator({ selectedSampleId, onSelectSample }: ProjectNa
       <h2
         style={{
           margin: 0,
-          fontSize: "0.95rem",
-          letterSpacing: "0.08em",
+          fontSize: "0.75rem",
+          letterSpacing: "0.06em",
           color: theme.text,
           textTransform: "uppercase"
         }}
@@ -352,9 +355,9 @@ export function ProjectNavigator({ selectedSampleId, onSelectSample }: ProjectNa
           listStyle: "none",
           padding: 0,
           margin: 0,
-          display: "flex",
-          flexDirection: "column",
-          gap: "10px",
+          display: "grid",
+          gridTemplateColumns: "repeat(auto-fill, minmax(180px, 1fr))",
+          gap: "8px",
           overflowY: "auto"
         }}
       >
@@ -369,9 +372,9 @@ export function ProjectNavigator({ selectedSampleId, onSelectSample }: ProjectNa
               key={sample.id}
               style={{
                 background: isSelected ? theme.surfaceRaised : theme.surfaceOverlay,
-                borderRadius: "14px",
+                borderRadius: "10px",
                 border: `1px solid ${isSelected ? theme.button.primary : theme.border}`,
-                padding: "14px 16px",
+                padding: "10px 12px",
                 boxShadow: isSelected ? theme.cardGlow : "none",
                 transition: "border 0.2s ease, box-shadow 0.2s ease"
               }}
@@ -387,7 +390,7 @@ export function ProjectNavigator({ selectedSampleId, onSelectSample }: ProjectNa
                 }}
               >
                 <div style={{ flex: 1, display: "flex", flexDirection: "column", gap: "4px" }}>
-                  <div style={{ display: "flex", alignItems: "center", gap: "10px" }}>
+                  <div style={{ display: "flex", alignItems: "center", gap: "8px" }}>
                     <button
                       type="button"
                       onClick={(event) => {
@@ -395,25 +398,27 @@ export function ProjectNavigator({ selectedSampleId, onSelectSample }: ProjectNa
                         toggleExpand(sample.id);
                       }}
                       style={{
-                        width: "26px",
-                        height: "26px",
-                        borderRadius: "8px",
+                        width: "22px",
+                        height: "22px",
+                        borderRadius: "6px",
                         border: `1px solid ${theme.button.outline}`,
                         background: theme.button.base,
                         color: theme.text,
+                        fontSize: "0.7rem",
                         cursor: "pointer"
                       }}
                     >
                       {expanded ? "−" : "+"}
                     </button>
-                    <strong style={{ fontSize: "0.95rem", color: theme.text }}>{sample.name}</strong>
+                    <strong style={{ fontSize: "0.74rem", color: theme.text }}>{sample.name}</strong>
                   </div>
                   <div
                     style={{
-                      fontSize: "0.78rem",
+                      fontSize: "0.68rem",
                       color: theme.textMuted,
                       display: "flex",
-                      gap: "10px"
+                      gap: "8px",
+                      flexWrap: "wrap"
                     }}
                   >
                     <span>{sample.bpm ? `${sample.bpm} BPM` : "Analyzing BPM"}</span>
@@ -421,12 +426,12 @@ export function ProjectNavigator({ selectedSampleId, onSelectSample }: ProjectNa
                     <span>{sample.measures.length ? `${sample.measures.length} measures` : "Preparing measures"}</span>
                   </div>
                   {sample.retuneMap && (
-                    <div style={{ fontSize: "0.72rem", color: theme.button.primary, opacity: 0.9 }}>
+                    <div style={{ fontSize: "0.65rem", color: theme.button.primary, opacity: 0.85 }}>
                       {sample.retuneMap.join(" · ")}
                     </div>
                   )}
                 </div>
-                <div style={{ display: "flex", flexDirection: "column", alignItems: "flex-end", gap: "8px" }}>
+                <div style={{ display: "flex", flexDirection: "column", alignItems: "flex-end", gap: "6px" }}>
                   <button
                     type="button"
                     onClick={(event) => {
@@ -434,13 +439,14 @@ export function ProjectNavigator({ selectedSampleId, onSelectSample }: ProjectNa
                       void toggleSamplePlayback(sample);
                     }}
                     style={{
-                      width: "42px",
-                      height: "42px",
+                      width: "34px",
+                      height: "34px",
                       borderRadius: "50%",
                       border: `1px solid ${theme.button.outline}`,
                       background: playingId === sample.id ? theme.button.primary : theme.button.base,
                       color: playingId === sample.id ? theme.button.primaryText : theme.text,
                       fontWeight: 700,
+                      fontSize: "0.65rem",
                       cursor: "pointer",
                       boxShadow: playingId === sample.id ? theme.cardGlow : "none"
                     }}
@@ -452,8 +458,8 @@ export function ProjectNavigator({ selectedSampleId, onSelectSample }: ProjectNa
                       <span
                         key={`${sample.id}-${color}`}
                         style={{
-                          width: "10px",
-                          height: "10px",
+                          width: "8px",
+                          height: "8px",
                           borderRadius: "999px",
                           background: color,
                           boxShadow: "0 0 12px rgba(0,0,0,0.35)"
@@ -469,15 +475,15 @@ export function ProjectNavigator({ selectedSampleId, onSelectSample }: ProjectNa
                   style={{
                     display: "flex",
                     flexDirection: "column",
-                    gap: "12px",
-                    marginTop: "14px"
+                    gap: "8px",
+                    marginTop: "10px"
                   }}
                 >
                   <div
                     style={{
                       display: "flex",
                       flexDirection: "column",
-                      gap: "6px"
+                      gap: "4px"
                     }}
                   >
                     <div
@@ -485,8 +491,8 @@ export function ProjectNavigator({ selectedSampleId, onSelectSample }: ProjectNa
                         display: "flex",
                         justifyContent: "space-between",
                         alignItems: "center",
-                        padding: "10px 12px",
-                        borderRadius: "10px",
+                        padding: "8px 10px",
+                        borderRadius: "8px",
                         border: `1px solid ${theme.border}`,
                         background: theme.surface
                       }}
@@ -496,9 +502,9 @@ export function ProjectNavigator({ selectedSampleId, onSelectSample }: ProjectNa
                         event.dataTransfer.setData("application/x-sample", sample.id);
                       }}
                     >
-                      <div style={{ display: "flex", flexDirection: "column", gap: "4px" }}>
-                        <strong style={{ fontSize: "0.85rem", color: theme.text }}>Full sample</strong>
-                        <span style={{ fontSize: "0.74rem", color: theme.textMuted }}>
+                      <div style={{ display: "flex", flexDirection: "column", gap: "2px" }}>
+                        <strong style={{ fontSize: "0.75rem", color: theme.text }}>Full sample</strong>
+                        <span style={{ fontSize: "0.65rem", color: theme.textMuted }}>
                           {sample.length.toFixed(2)}s • {sample.measures.length} measures
                         </span>
                       </div>
@@ -509,13 +515,14 @@ export function ProjectNavigator({ selectedSampleId, onSelectSample }: ProjectNa
                           void toggleSamplePlayback(sample);
                         }}
                         style={{
-                          width: "32px",
-                          height: "32px",
+                          width: "26px",
+                          height: "26px",
                           borderRadius: "50%",
                           border: `1px solid ${theme.button.outline}`,
                           background: playingId === sample.id ? theme.button.primary : theme.button.base,
                           color: playingId === sample.id ? theme.button.primaryText : theme.text,
                           cursor: "pointer",
+                          fontSize: "0.6rem",
                           boxShadow: playingId === sample.id ? theme.cardGlow : "none"
                         }}
                       >
@@ -528,7 +535,7 @@ export function ProjectNavigator({ selectedSampleId, onSelectSample }: ProjectNa
                     <summary
                       style={{
                         cursor: "pointer",
-                        fontSize: "0.82rem",
+                        fontSize: "0.72rem",
                         color: theme.text,
                         listStyle: "none"
                       }}
@@ -538,11 +545,11 @@ export function ProjectNavigator({ selectedSampleId, onSelectSample }: ProjectNa
                     <ul
                       style={{
                         listStyle: "none",
-                        margin: "10px 0 0",
+                        margin: "6px 0 0",
                         padding: 0,
                         display: "flex",
                         flexDirection: "column",
-                        gap: "8px"
+                        gap: "6px"
                       }}
                     >
                       {sample.stems.map((stem) => (
@@ -552,8 +559,8 @@ export function ProjectNavigator({ selectedSampleId, onSelectSample }: ProjectNa
                             display: "flex",
                             justifyContent: "space-between",
                             alignItems: "center",
-                            padding: "8px 10px",
-                            borderRadius: "10px",
+                            padding: "6px 8px",
+                            borderRadius: "8px",
                             border: `1px solid ${theme.border}`,
                             background: `${stem.color}1a`
                           }}
@@ -569,8 +576,8 @@ export function ProjectNavigator({ selectedSampleId, onSelectSample }: ProjectNa
                           <span style={{ display: "flex", alignItems: "center", gap: "8px", color: theme.text }}>
                             <span
                               style={{
-                                width: "10px",
-                                height: "10px",
+                                width: "8px",
+                                height: "8px",
                                 borderRadius: "50%",
                                 background: stem.color
                               }}
@@ -584,13 +591,14 @@ export function ProjectNavigator({ selectedSampleId, onSelectSample }: ProjectNa
                               void playStem(sample, stem);
                             }}
                             style={{
-                              width: "28px",
-                              height: "28px",
+                              width: "24px",
+                              height: "24px",
                               borderRadius: "50%",
                               border: `1px solid ${theme.button.outline}`,
                               background: playingId === stem.id ? theme.button.primary : theme.button.base,
                               color: playingId === stem.id ? theme.button.primaryText : theme.text,
-                              cursor: "pointer"
+                              cursor: "pointer",
+                              fontSize: "0.6rem"
                             }}
                           >
                             {playingId === stem.id ? "■" : "▶"}
@@ -604,7 +612,7 @@ export function ProjectNavigator({ selectedSampleId, onSelectSample }: ProjectNa
                     <summary
                       style={{
                         cursor: "pointer",
-                        fontSize: "0.82rem",
+                        fontSize: "0.72rem",
                         color: theme.text,
                         listStyle: "none"
                       }}
@@ -671,7 +679,7 @@ export function ProjectNavigator({ selectedSampleId, onSelectSample }: ProjectNa
                               }}
                             >
                               <div style={{ display: "flex", flexDirection: "column", gap: "4px" }}>
-                                <strong style={{ fontSize: "0.82rem", color: theme.text }}>
+                        <strong style={{ fontSize: "0.72rem", color: theme.text }}>
                                   Measure {index + 1}
                                 </strong>
                                 <span style={{ fontSize: "0.72rem", color: theme.textMuted }}>

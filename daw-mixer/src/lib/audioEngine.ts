@@ -1,4 +1,4 @@
-import type { Measure, SampleClip, StemInfo } from "../types";
+import type { Measure, SampleClip, StemInfo, TimelineChannel } from "../types";
 
 type PlaybackTarget = StemInfo | SampleClip;
 
@@ -20,7 +20,7 @@ export interface AudioEngineOptions {
 export class AudioEngine {
   private context = new AudioContext();
   private gainNode = this.context.createGain();
-  private currentSource: AudioBufferSourceNode | null = null;
+  private activeSources: AudioBufferSourceNode[] = [];
   private startTime = 0;
   private startOffset = 0;
   private scheduledMeasures: Measure[] = [];
@@ -28,6 +28,9 @@ export class AudioEngine {
   private timelineOffset = 0;
   private rafId: number | null = null;
   private stemChain: AudioNode[] = [];
+  private playbackDuration = 0;
+  private shouldEmitTimelineEvents = true;
+  private channelMix = new Map<string, { volume: number; pan: number }>();
 
   constructor(options: AudioEngineOptions = {}) {
     this.gainNode.connect(this.context.destination);
@@ -54,73 +57,176 @@ export class AudioEngine {
   async play(
     target: PlaybackTarget,
     measures?: Measure[],
-    options: { timelineOffset?: number } = {}
+    options: { timelineOffset?: number; emitTimelineEvents?: boolean } = {}
   ) {
     await this.context.resume();
     const buffer = await this.decodeSample(target);
     if (!buffer) return;
 
     this.stop(false);
-    this.currentSource = this.context.createBufferSource();
-    this.currentSource.buffer = buffer;
-    this.connectThroughChain(this.currentSource, []);
+    const source = this.context.createBufferSource();
+    source.buffer = buffer;
+    this.connectThroughChain(source, []);
+    this.activeSources = [source];
     this.startTime = this.context.currentTime;
     this.startOffset = 0;
     this.scheduledMeasures = measures ?? [];
     this.timelineOffset = options.timelineOffset ?? 0;
+    this.shouldEmitTimelineEvents = options.emitTimelineEvents ?? true;
     const { startOffset, duration } = getPlaybackOffsets(target);
     if (duration !== undefined) {
-      this.currentSource.start(0, startOffset, duration);
+      source.start(0, startOffset, duration);
+      this.playbackDuration = duration;
     } else {
-      this.currentSource.start(0, startOffset);
+      source.start(0, startOffset);
+      this.playbackDuration = buffer.duration - startOffset;
     }
-    this.currentSource.onended = () => {
-      this.finalizePlayback();
+    source.onended = () => {
+      this.handleSourceEnded(source);
     };
     this.dispatchPlayEvent();
-    this.watchMeasures();
+    this.startWatch();
   }
 
   async playSegment(
     target: PlaybackTarget,
     segmentStart: number,
     segmentDuration: number,
-    options: { timelineOffset?: number } = {}
+    options: { timelineOffset?: number; emitTimelineEvents?: boolean } = {}
   ) {
     await this.context.resume();
     const buffer = await this.decodeSample(target);
     if (!buffer) return;
 
     this.stop(false);
-    this.currentSource = this.context.createBufferSource();
-    this.currentSource.buffer = buffer;
-    this.connectThroughChain(this.currentSource, []);
+    const source = this.context.createBufferSource();
+    source.buffer = buffer;
+    this.connectThroughChain(source, []);
     const { startOffset } = getPlaybackOffsets(target);
     const start = startOffset + segmentStart;
-    this.currentSource.start(0, start, segmentDuration);
+    source.start(0, start, segmentDuration);
+    this.activeSources = [source];
     this.startTime = this.context.currentTime;
     this.startOffset = start;
     this.scheduledMeasures = [];
     this.timelineOffset = options.timelineOffset ?? 0;
-    this.currentSource.onended = () => {
-      this.finalizePlayback();
+    this.shouldEmitTimelineEvents = options.emitTimelineEvents ?? true;
+    this.playbackDuration = segmentDuration;
+    source.onended = () => {
+      this.handleSourceEnded(source);
     };
     this.dispatchPlayEvent();
-    this.watchMeasures();
+    this.startWatch();
+  }
+
+  async playStem(
+    sample: SampleClip,
+    stem: StemInfo,
+    measures?: Measure[],
+    options: { timelineOffset?: number; emitTimelineEvents?: boolean } = {}
+  ) {
+    await this.context.resume();
+    const buffer = await this.decodeSample(sample);
+    if (!buffer) return;
+
+    this.stop(false);
+    const source = this.context.createBufferSource();
+    source.buffer = buffer;
+
+    const chain = this.buildStemChain(stem.type);
+    this.connectThroughChain(source, chain);
+
+    const { startOffset, duration } = getPlaybackOffsets(stem);
+    this.activeSources = [source];
+    this.startTime = this.context.currentTime;
+    this.startOffset = startOffset ?? 0;
+    this.scheduledMeasures = measures ?? [];
+    this.timelineOffset = options.timelineOffset ?? 0;
+    this.shouldEmitTimelineEvents = options.emitTimelineEvents ?? true;
+
+    if (duration !== undefined) {
+      source.start(0, startOffset ?? 0, duration);
+      this.playbackDuration = duration;
+    } else {
+      source.start(0, startOffset ?? 0);
+      this.playbackDuration = buffer.duration - (startOffset ?? 0);
+    }
+
+    source.onended = () => {
+      this.handleSourceEnded(source);
+    };
+
+    this.dispatchPlayEvent();
+    this.startWatch();
+  }
+
+  async playTimeline(clips: SampleClip[]) {
+    const playable = clips.filter((clip) => clip.isInTimeline !== false);
+    if (playable.length === 0) return;
+
+    await this.context.resume();
+    this.stop(false);
+    this.shouldEmitTimelineEvents = true;
+    this.timelineOffset = 0;
+    this.scheduledMeasures = [];
+
+    const buffers = await Promise.all(playable.map((clip) => this.decodeSample(clip)));
+    const now = this.context.currentTime + 0.05;
+    this.startTime = now;
+    this.startOffset = 0;
+
+    let longest = 0;
+    const sources: AudioBufferSourceNode[] = [];
+
+    playable.forEach((clip, index) => {
+      const buffer = buffers[index];
+      if (!buffer) return;
+      const source = this.context.createBufferSource();
+      source.buffer = buffer;
+      const mix = clip.channelId ? this.channelMix.get(clip.channelId) : undefined;
+      if (mix) {
+        const gain = this.context.createGain();
+        gain.gain.value = mix.volume;
+        const panner = this.context.createStereoPanner();
+        panner.pan.value = mix.pan;
+        source.connect(gain);
+        gain.connect(panner);
+        panner.connect(this.gainNode);
+      } else {
+        source.connect(this.gainNode);
+      }
+      const { startOffset, duration } = getPlaybackOffsets(clip);
+      const when = now + clip.position;
+      if (duration !== undefined) {
+        source.start(when, startOffset, duration);
+        longest = Math.max(longest, clip.position + duration);
+      } else {
+        const clipDuration = clip.duration ?? clip.length ?? buffer.duration - startOffset;
+        source.start(when, startOffset);
+        longest = Math.max(longest, clip.position + clipDuration);
+      }
+      source.onended = () => this.handleSourceEnded(source);
+      sources.push(source);
+    });
+
+    this.playbackDuration = longest;
+    this.activeSources = sources;
+    this.dispatchPlayEvent();
+    this.startWatch();
   }
 
   stop(emitEvent = true) {
-    if (this.currentSource) {
-      try {
-        this.currentSource.stop();
-      } catch (error) {
-        // Source may already be stopped; ignore.
-      }
-      this.currentSource.disconnect();
-      this.currentSource.onended = null;
-      this.currentSource = null;
+    if (this.activeSources.length > 0) {
+      this.activeSources.forEach((source) => {
+        try {
+          source.stop();
+        } catch (error) {
+          // Source may already be stopped.
+        }
+        source.disconnect();
+      });
+      this.activeSources = [];
     }
-    this.cleanupStemChain();
     this.finalizePlayback(emitEvent);
   }
 
@@ -128,70 +234,55 @@ export class AudioEngine {
     this.gainNode.gain.setTargetAtTime(value, this.context.currentTime, 0.05);
   }
 
+  setChannelMix(channelId: string, mix: { volume: number; pan: number }) {
+    this.channelMix.set(channelId, mix);
+  }
+
+  syncChannelMix(channels: TimelineChannel[]) {
+    this.channelMix.clear();
+    channels.forEach((channel) => {
+      this.channelMix.set(channel.id, {
+        volume: channel.volume ?? 0.85,
+        pan: channel.pan ?? 0,
+      });
+    });
+  }
+
   isPlaying() {
-    return this.currentSource !== null;
+    return this.activeSources.length > 0;
   }
 
   getPlaybackPosition() {
-    if (!this.currentSource) return null;
-    return this.context.currentTime - this.startTime + this.startOffset;
+    if (this.activeSources.length === 0) return null;
+    const elapsed = this.context.currentTime - this.startTime + this.startOffset;
+    return Math.max(0, Math.min(elapsed, this.playbackDuration));
   }
 
-  private watchMeasures() {
-    if (!this.currentSource) return;
+  private startWatch() {
+    if (!this.shouldEmitTimelineEvents) return;
+    if (this.activeSources.length === 0) return;
     const check = () => {
-      if (!this.currentSource) return;
+      if (this.activeSources.length === 0) return;
       const elapsed = this.context.currentTime - this.startTime + this.startOffset;
       if (this.scheduledMeasures.length > 0) {
-        const measure = this.scheduledMeasures.find((m) => elapsed >= m.start && elapsed < m.end);
+        const measure = this.scheduledMeasures.find((item) => elapsed >= item.start && elapsed < item.end);
         if (measure) {
           this.onMeasure?.(measure);
         }
       }
       this.dispatchTickEvent(elapsed);
-      if (this.currentSource) {
+      if (this.activeSources.length > 0) {
         this.rafId = requestAnimationFrame(check);
       }
     };
     this.rafId = requestAnimationFrame(check);
   }
 
-  async playStem(
-    sample: SampleClip,
-    stem: StemInfo,
-    measures?: Measure[],
-    options: { timelineOffset?: number } = {}
-  ) {
-    await this.context.resume();
-    const buffer = await this.decodeSample(sample);
-    if (!buffer) return;
-
-    this.stop(false);
-    this.currentSource = this.context.createBufferSource();
-    this.currentSource.buffer = buffer;
-
-    const chain = this.buildStemChain(stem.type);
-    this.stemChain = chain;
-    this.connectThroughChain(this.currentSource, chain);
-
-    const { startOffset, duration } = getPlaybackOffsets(stem);
-    this.startTime = this.context.currentTime;
-    this.startOffset = startOffset ?? 0;
-    this.scheduledMeasures = measures ?? [];
-    this.timelineOffset = options.timelineOffset ?? 0;
-
-    if (duration !== undefined) {
-      this.currentSource.start(0, startOffset ?? 0, duration);
-    } else {
-      this.currentSource.start(0, startOffset ?? 0);
-    }
-
-    this.currentSource.onended = () => {
+  private handleSourceEnded(source: AudioBufferSourceNode) {
+    this.activeSources = this.activeSources.filter((item) => item !== source);
+    if (this.activeSources.length === 0) {
       this.finalizePlayback();
-    };
-
-    this.dispatchPlayEvent();
-    this.watchMeasures();
+    }
   }
 
   private finalizePlayback(emitEvent = true) {
@@ -200,13 +291,15 @@ export class AudioEngine {
       this.rafId = null;
     }
     this.cleanupStemChain();
-    if (emitEvent) {
+    if (emitEvent && this.shouldEmitTimelineEvents) {
       this.dispatchStopEvent();
     }
     this.startTime = 0;
     this.startOffset = 0;
     this.scheduledMeasures = [];
     this.timelineOffset = 0;
+    this.playbackDuration = 0;
+    this.shouldEmitTimelineEvents = true;
   }
 
   private cleanupStemChain() {
@@ -286,7 +379,7 @@ export class AudioEngine {
   }
 
   private dispatchPlayEvent() {
-    if (typeof window === "undefined") return;
+    if (typeof window === "undefined" || !this.shouldEmitTimelineEvents) return;
     window.dispatchEvent(
       new CustomEvent("audio-play", {
         detail: {
@@ -302,7 +395,7 @@ export class AudioEngine {
   }
 
   private dispatchTickEvent(position: number) {
-    if (typeof window === "undefined") return;
+    if (typeof window === "undefined" || !this.shouldEmitTimelineEvents) return;
     window.dispatchEvent(
       new CustomEvent("audio-tick", {
         detail: {

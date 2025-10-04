@@ -21,19 +21,20 @@ export function SampleDetailPanel({ sample }: SampleDetailPanelProps) {
     return (
       <div
         style={{
-          padding: "18px",
-          borderRadius: "18px",
+          padding: "14px",
+          borderRadius: "12px",
           background: theme.surfaceOverlay,
           border: `1px dashed ${theme.button.outline}`,
           display: "flex",
           alignItems: "center",
           justifyContent: "center",
-          minHeight: "200px",
+          minHeight: "160px",
           textAlign: "center",
-          color: theme.textMuted
+          color: theme.textMuted,
+          fontSize: "0.72rem"
         }}
       >
-        <p style={{ margin: 0, fontSize: "0.9rem" }}>
+        <p style={{ margin: 0 }}>
           Select a sample to explore beat detection, technicolor stems, and retuning notes.
         </p>
       </div>
@@ -61,39 +62,38 @@ export function SampleDetailPanel({ sample }: SampleDetailPanelProps) {
   return (
     <div
       style={{
-        padding: "18px",
-        borderRadius: "18px",
+        padding: "14px",
+        borderRadius: "12px",
         background: theme.surfaceOverlay,
         display: "flex",
         flexDirection: "column",
-        gap: "14px",
+        gap: "10px",
         border: `1px solid ${theme.border}`,
-        color: theme.text,
-        boxShadow: theme.cardGlow
+        color: theme.text
       }}
     >
       <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start" }}>
         <div>
-          <h2 style={{ margin: 0, letterSpacing: "0.05em" }}>{sample.name}</h2>
+          <h2 style={{ margin: 0, letterSpacing: "0.05em", fontSize: "0.95rem" }}>{sample.name}</h2>
           {sample.variantLabel && (
-            <span style={{ fontSize: "0.78rem", color: theme.textMuted }}>{sample.variantLabel}</span>
+            <span style={{ fontSize: "0.7rem", color: theme.textMuted }}>{sample.variantLabel}</span>
           )}
         </div>
         {sample.originSampleId && (
-          <span style={{ fontSize: "0.75rem", color: theme.textMuted }}>
+          <span style={{ fontSize: "0.68rem", color: theme.textMuted }}>
             Fragment of {sample.originSampleId.slice(0, 6)}…
           </span>
         )}
       </div>
-      <div style={{ display: "flex", gap: "12px", fontSize: "0.82rem", color: theme.textMuted }}>
+      <div style={{ display: "flex", gap: "10px", fontSize: "0.7rem", color: theme.textMuted, flexWrap: "wrap" }}>
         <span>BPM: {sample.bpm ?? "Detecting"}</span>
         <span>Key: {sample.key ?? "Detecting"}</span>
         <span>Measures: {sample.measures.length || "Detecting"}</span>
         {rekeyTimestamp && <span>Re-keyed {rekeyTimestamp}</span>}
       </div>
-      <label style={{ display: "flex", flexDirection: "column", gap: "6px", fontSize: "0.82rem" }}>
+      <label style={{ display: "flex", flexDirection: "column", gap: "4px", fontSize: "0.72rem" }}>
         First beat nudging (seconds)
-        <div style={{ display: "flex", gap: "8px", alignItems: "center" }}>
+        <div style={{ display: "flex", gap: "6px", alignItems: "center" }}>
           <input
             type="range"
             min={-0.5}
@@ -102,19 +102,19 @@ export function SampleDetailPanel({ sample }: SampleDetailPanelProps) {
             value={nudge}
             onChange={(event) => setNudge(Number(event.target.value))}
           />
-          <span style={{ fontSize: "0.8rem", width: "56px", color: theme.textMuted }}>{nudge.toFixed(2)}</span>
+          <span style={{ fontSize: "0.68rem", width: "48px", color: theme.textMuted }}>{nudge.toFixed(2)}</span>
           <button
             type="button"
             onClick={applyNudge}
             style={{
               border: `1px solid ${theme.button.outline}`,
-              padding: "8px 14px",
+              padding: "6px 10px",
               borderRadius: "999px",
               background: theme.button.primary,
               color: theme.button.primaryText,
               fontWeight: 600,
-              cursor: "pointer",
-              boxShadow: theme.cardGlow
+              fontSize: "0.68rem",
+              cursor: "pointer"
             }}
           >
             Apply
@@ -122,23 +122,23 @@ export function SampleDetailPanel({ sample }: SampleDetailPanelProps) {
         </div>
       </label>
       <div>
-        <h3 style={{ margin: "0 0 8px", fontSize: "0.9rem", color: theme.button.primary }}>
+        <h3 style={{ margin: "0 0 6px", fontSize: "0.78rem", color: theme.button.primary }}>
           Measure detection
         </h3>
         <ul
           style={{
             margin: 0,
             paddingLeft: "18px",
-            maxHeight: "160px",
+            maxHeight: "140px",
             overflow: "auto",
             color: theme.textMuted,
             display: "flex",
             flexDirection: "column",
-            gap: "6px"
+            gap: "4px"
           }}
         >
           {sample.measures.map((measure, index) => (
-            <li key={measure.id} style={{ fontSize: "0.85rem" }}>
+            <li key={measure.id} style={{ fontSize: "0.7rem" }}>
               Measure {index + 1}: {measure.start.toFixed(2)}s → {measure.end.toFixed(2)}s · Pitch
               {" "}
               {measure.detectedPitch ?? "?"}
@@ -151,7 +151,7 @@ export function SampleDetailPanel({ sample }: SampleDetailPanelProps) {
       </div>
       {sample.retuneMap && (
         <div>
-          <h3 style={{ margin: "0 0 8px", fontSize: "0.9rem", color: theme.button.primary }}>
+          <h3 style={{ margin: "0 0 6px", fontSize: "0.78rem", color: theme.button.primary }}>
             Re-key map
           </h3>
           <ul
@@ -159,12 +159,12 @@ export function SampleDetailPanel({ sample }: SampleDetailPanelProps) {
               margin: 0,
               paddingLeft: "18px",
               display: "grid",
-              gap: "4px",
+              gap: "2px",
               color: theme.textMuted
             }}
           >
             {sample.retuneMap.map((entry, index) => (
-              <li key={`${sample.id}-retune-${index}`} style={{ fontSize: "0.82rem" }}>
+              <li key={`${sample.id}-retune-${index}`} style={{ fontSize: "0.68rem" }}>
                 {entry}
               </li>
             ))}
@@ -172,7 +172,7 @@ export function SampleDetailPanel({ sample }: SampleDetailPanelProps) {
         </div>
       )}
       <div>
-        <h3 style={{ margin: "0 0 8px", fontSize: "0.9rem", color: theme.button.primary }}>
+        <h3 style={{ margin: "0 0 6px", fontSize: "0.78rem", color: theme.button.primary }}>
           Stem routing
         </h3>
         <ul
@@ -180,12 +180,12 @@ export function SampleDetailPanel({ sample }: SampleDetailPanelProps) {
             margin: 0,
             paddingLeft: "18px",
             display: "grid",
-            gap: "4px",
+            gap: "2px",
             color: theme.textMuted
           }}
         >
           {sample.stems.map((stem) => (
-            <li key={stem.id} style={{ fontSize: "0.85rem" }}>
+            <li key={stem.id} style={{ fontSize: "0.7rem" }}>
               {stem.name} — {stem.type}
             </li>
           ))}
@@ -195,13 +195,13 @@ export function SampleDetailPanel({ sample }: SampleDetailPanelProps) {
         type="button"
         style={{
           border: `1px solid ${theme.button.outline}`,
-          padding: "10px 18px",
+          padding: "6px 12px",
           borderRadius: "999px",
           background: theme.button.primary,
           color: theme.button.primaryText,
           fontWeight: 600,
-          cursor: "pointer",
-          boxShadow: theme.cardGlow
+          fontSize: "0.7rem",
+          cursor: "pointer"
         }}
         onClick={() => {
           const blob = new Blob([JSON.stringify(sample, null, 2)], { type: "application/json" });
