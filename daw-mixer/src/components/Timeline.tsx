@@ -31,6 +31,7 @@ type SnapResolution = "measure" | "half-measure" | "beat" | "half-beat";
 const MEASURE_WIDTH = 84;
 const CLIP_HEIGHT = 48;
 const CHANNEL_HEIGHT = 72;
+const MAX_CLONE_COUNT = 32;
 
 const SNAP_DIVISORS: Record<SnapResolution, number> = {
   measure: 1,
@@ -83,6 +84,25 @@ export function Timeline({ project, selectedSampleId, onSelectSample }: Timeline
     originPosition: number;
     channelId: string;
   } | null>(null);
+  const channelGesture = useRef<
+    | {
+        type: "clone";
+        pointerId: number;
+        channelId: string;
+        sourceSample: SampleClip;
+        baseEnd: number;
+        clones: string[];
+      }
+    | {
+        type: "trim";
+        pointerId: number;
+        channelId: string;
+        sampleId: string;
+        originalLength: number;
+        lastAppliedLength: number;
+      }
+    | null
+  >(null);
   const [snapResolution, setSnapResolution] = useState<SnapResolution>("measure");
   const [playheadPosition, setPlayheadPosition] = useState(0);
   const [isTimelinePlaying, setIsTimelinePlaying] = useState(false);
@@ -220,6 +240,18 @@ export function Timeline({ project, selectedSampleId, onSelectSample }: Timeline
     [secondsPerMeasure, snapResolution],
   );
 
+  const pointerTimelinePosition = useCallback(
+    (clientX: number) => {
+      const container = scrollRef.current;
+      if (!container) return 0;
+      const bounds = container.getBoundingClientRect();
+      const relativeX = clientX - bounds.left + container.scrollLeft;
+      const measuresFromStart = Math.max(0, relativeX / MEASURE_WIDTH);
+      return measuresFromStart * secondsPerMeasure;
+    },
+    [secondsPerMeasure],
+  );
+
   const duplicateClip = useCallback(
     (sample: SampleClip) => {
       if (!sample.channelId) return;
@@ -238,6 +270,139 @@ export function Timeline({ project, selectedSampleId, onSelectSample }: Timeline
       onSelectSample(fragment.id);
     },
     [currentProjectId, dispatch, onSelectSample, secondsPerMeasure, snapResolution],
+  );
+
+  const handleChannelPointerDown = useCallback(
+    (event: ReactPointerEvent<HTMLDivElement>, channel: TimelineChannel) => {
+      if (channel.type !== "audio") return;
+      const target = event.target as HTMLElement;
+      if (target.closest('[data-clip-id]')) return;
+      const samples = channelSamples.get(channel.id);
+      if (!samples || samples.length === 0) return;
+
+      if (event.button === 0) {
+        const lastSample = samples[samples.length - 1];
+        if (!lastSample.channelId) return;
+        const pointerTime = pointerTimelinePosition(event.clientX);
+        const baseEnd = lastSample.position + lastSample.length;
+        if (pointerTime < baseEnd) return;
+        channelGesture.current = {
+          type: "clone",
+          pointerId: event.pointerId,
+          channelId: channel.id,
+          sourceSample: lastSample,
+          baseEnd,
+          clones: [],
+        };
+        event.currentTarget.setPointerCapture(event.pointerId);
+      }
+
+      if (event.button === 2) {
+        event.preventDefault();
+        const pointerTime = pointerTimelinePosition(event.clientX);
+        const candidate = [...samples]
+          .reverse()
+          .find((sample) => pointerTime >= sample.position + sample.length - 1e-3);
+        if (!candidate) return;
+        const candidateEnd = candidate.position + candidate.length;
+        if (pointerTime < candidateEnd) return;
+        channelGesture.current = {
+          type: "trim",
+          pointerId: event.pointerId,
+          channelId: channel.id,
+          sampleId: candidate.id,
+          originalLength: candidate.length,
+          lastAppliedLength: candidate.length,
+        };
+        event.currentTarget.setPointerCapture(event.pointerId);
+      }
+    },
+    [channelSamples, pointerTimelinePosition],
+  );
+
+  const handleChannelPointerMove = useCallback(
+    (event: ReactPointerEvent<HTMLDivElement>, channel: TimelineChannel) => {
+      const gesture = channelGesture.current;
+      if (!gesture || gesture.pointerId !== event.pointerId || gesture.channelId !== channel.id)
+        return;
+
+      if (gesture.type === "clone") {
+        const pointerTime = pointerTimelinePosition(event.clientX);
+        const delta = pointerTime - gesture.baseEnd;
+        const unit = gesture.sourceSample.length;
+        if (unit <= 0) return;
+        const desiredCount = Math.min(
+          MAX_CLONE_COUNT,
+          Math.max(0, Math.floor(delta / unit)),
+        );
+
+        if (desiredCount < gesture.clones.length) {
+          const toRemove = gesture.clones.splice(desiredCount);
+          toRemove.forEach((sampleId) =>
+            dispatch({ type: "remove-sample", projectId: currentProjectId, sampleId }),
+          );
+        }
+
+        while (gesture.clones.length < desiredCount) {
+          const position = gesture.baseEnd + gesture.clones.length * unit;
+          const fragment = sliceSampleSegment(gesture.sourceSample, 0, unit, {
+            position,
+            isFragment: gesture.sourceSample.isFragment,
+            isInTimeline: true,
+            channelId: gesture.sourceSample.channelId,
+          });
+          gesture.clones.push(fragment.id);
+          dispatch({ type: "add-sample", projectId: currentProjectId, sample: fragment });
+        }
+      }
+
+      if (gesture.type === "trim") {
+        const sample = project.samples.find((item) => item.id === gesture.sampleId);
+        if (!sample) return;
+        const sampleEnd = sample.position + gesture.originalLength;
+        const pointerTime = Math.min(pointerTimelinePosition(event.clientX), sampleEnd);
+        const gridSize = secondsPerMeasure / SNAP_DIVISORS[snapResolution];
+        const delta = Math.max(0, sampleEnd - pointerTime);
+        const steps = Math.floor(delta / gridSize);
+        const minimumLength = Math.min(gesture.originalLength, gridSize);
+        const newLength = Math.max(minimumLength, gesture.originalLength - steps * gridSize);
+        if (Math.abs(newLength - gesture.lastAppliedLength) < 1e-3) return;
+
+        const measures = sample.measures
+          .filter((measure) => measure.start < newLength)
+          .map((measure) => {
+            const end = Math.min(measure.end, newLength);
+            const beats = measure.beats
+              ?.filter((beat) => beat.start < newLength)
+              .map((beat) => ({
+                ...beat,
+                end: Math.min(beat.end, newLength),
+              }));
+            return { ...measure, end, beats };
+          });
+
+        dispatch({
+          type: "update-sample",
+          projectId: currentProjectId,
+          sampleId: sample.id,
+          sample: { length: newLength, duration: newLength, measures },
+        });
+        gesture.lastAppliedLength = newLength;
+      }
+    },
+    [currentProjectId, dispatch, pointerTimelinePosition, project.samples, secondsPerMeasure, snapResolution],
+  );
+
+  const handleChannelPointerUp = useCallback(
+    (event: ReactPointerEvent<HTMLDivElement>) => {
+      const gesture = channelGesture.current;
+      if (!gesture || gesture.pointerId !== event.pointerId) return;
+      channelGesture.current = null;
+      if (event.currentTarget.hasPointerCapture(event.pointerId)) {
+        event.currentTarget.releasePointerCapture(event.pointerId);
+      }
+    },
+    [],
   );
 
   const handleChannelDrop = useCallback(
@@ -925,6 +1090,10 @@ export function Timeline({ project, selectedSampleId, onSelectSample }: Timeline
                     event.dataTransfer.dropEffect = "copy";
                   }}
                   onDrop={(event) => handleChannelDrop(channel, event)}
+                  onPointerDown={(event) => handleChannelPointerDown(event, channel)}
+                  onPointerMove={(event) => handleChannelPointerMove(event, channel)}
+                  onPointerUp={(event) => handleChannelPointerUp(event)}
+                  onContextMenu={(event) => event.preventDefault()}
                 >
                   {channel.type === "audio" && (
                     <>
@@ -939,6 +1108,7 @@ export function Timeline({ project, selectedSampleId, onSelectSample }: Timeline
                         return (
                           <div
                             key={sample.id}
+                            data-clip-id={sample.id}
                             style={{
                               position: "absolute",
                               top: "6px",

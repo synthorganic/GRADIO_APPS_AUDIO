@@ -350,14 +350,13 @@ export function ProjectNavigator({ selectedSampleId, onSelectSample }: ProjectNa
         Project navigator
       </h2>
 
-      <ul
+      <div
         style={{
-          listStyle: "none",
+          display: "flex",
+          flexDirection: "column",
+          gap: "6px",
           padding: 0,
           margin: 0,
-          display: "grid",
-          gridTemplateColumns: "repeat(auto-fill, minmax(180px, 1fr))",
-          gap: "8px",
           overflowY: "auto"
         }}
       >
@@ -367,16 +366,21 @@ export function ProjectNavigator({ selectedSampleId, onSelectSample }: ProjectNa
           const paletteChip = paletteOrder
             .map((type) => palette[type])
             .filter((color): color is string => Boolean(color));
+          const summary = [
+            sample.bpm ? `${sample.bpm} BPM` : "Analyzing BPM",
+            sample.key ? `Key ${sample.key}` : "Detecting key",
+            sample.measures.length ? `${sample.measures.length} measures` : "Preparing measures"
+          ].join(" • ");
           return (
-            <li
+            <div
               key={sample.id}
               style={{
                 background: isSelected ? theme.surfaceRaised : theme.surfaceOverlay,
-                borderRadius: "10px",
+                borderRadius: "8px",
                 border: `1px solid ${isSelected ? theme.button.primary : theme.border}`,
-                padding: "10px 12px",
                 boxShadow: isSelected ? theme.cardGlow : "none",
-                transition: "border 0.2s ease, box-shadow 0.2s ease"
+                transition: "border 0.2s ease, box-shadow 0.2s ease",
+                overflow: "hidden"
               }}
               onContextMenu={(event) => onSampleContextMenu(event, sample.id)}
               onClick={() => onSelectSample(sample.id)}
@@ -384,54 +388,82 @@ export function ProjectNavigator({ selectedSampleId, onSelectSample }: ProjectNa
               <div
                 style={{
                   display: "flex",
-                  justifyContent: "space-between",
                   alignItems: "center",
-                  gap: "12px"
+                  justifyContent: "space-between",
+                  padding: "6px 8px",
+                  gap: "8px",
+                  fontSize: "0.72rem"
                 }}
               >
-                <div style={{ flex: 1, display: "flex", flexDirection: "column", gap: "4px" }}>
-                  <div style={{ display: "flex", alignItems: "center", gap: "8px" }}>
-                    <button
-                      type="button"
-                      onClick={(event) => {
-                        event.stopPropagation();
-                        toggleExpand(sample.id);
-                      }}
-                      style={{
-                        width: "22px",
-                        height: "22px",
-                        borderRadius: "6px",
-                        border: `1px solid ${theme.button.outline}`,
-                        background: theme.button.base,
-                        color: theme.text,
-                        fontSize: "0.7rem",
-                        cursor: "pointer"
-                      }}
-                    >
-                      {expanded ? "−" : "+"}
-                    </button>
-                    <strong style={{ fontSize: "0.74rem", color: theme.text }}>{sample.name}</strong>
-                  </div>
-                  <div
+                <div
+                  style={{
+                    display: "flex",
+                    alignItems: "center",
+                    gap: "6px",
+                    flex: 1,
+                    minWidth: 0
+                  }}
+                >
+                  <button
+                    type="button"
+                    onClick={(event) => {
+                      event.stopPropagation();
+                      toggleExpand(sample.id);
+                    }}
                     style={{
-                      fontSize: "0.68rem",
-                      color: theme.textMuted,
+                      width: "18px",
+                      height: "18px",
+                      borderRadius: "4px",
+                      border: `1px solid ${theme.button.outline}`,
+                      background: "transparent",
+                      color: theme.text,
+                      fontSize: "0.6rem",
                       display: "flex",
-                      gap: "8px",
-                      flexWrap: "wrap"
+                      alignItems: "center",
+                      justifyContent: "center",
+                      cursor: "pointer",
+                      padding: 0
                     }}
                   >
-                    <span>{sample.bpm ? `${sample.bpm} BPM` : "Analyzing BPM"}</span>
-                    <span>{sample.key ? `Key ${sample.key}` : "Detecting key"}</span>
-                    <span>{sample.measures.length ? `${sample.measures.length} measures` : "Preparing measures"}</span>
-                  </div>
+                    {expanded ? "▾" : "▸"}
+                  </button>
+                  <strong
+                    style={{
+                      fontSize: "0.72rem",
+                      color: theme.text,
+                      whiteSpace: "nowrap",
+                      overflow: "hidden",
+                      textOverflow: "ellipsis"
+                    }}
+                  >
+                    {sample.name}
+                  </strong>
+                  <span
+                    style={{
+                      color: theme.textMuted,
+                      fontSize: "0.66rem",
+                      whiteSpace: "nowrap",
+                      overflow: "hidden",
+                      textOverflow: "ellipsis"
+                    }}
+                  >
+                    {summary}
+                  </span>
                   {sample.retuneMap && (
-                    <div style={{ fontSize: "0.65rem", color: theme.button.primary, opacity: 0.85 }}>
+                    <span
+                      style={{
+                        color: theme.button.primary,
+                        fontSize: "0.62rem",
+                        whiteSpace: "nowrap",
+                        overflow: "hidden",
+                        textOverflow: "ellipsis"
+                      }}
+                    >
                       {sample.retuneMap.join(" · ")}
-                    </div>
+                    </span>
                   )}
                 </div>
-                <div style={{ display: "flex", flexDirection: "column", alignItems: "flex-end", gap: "6px" }}>
+                <div style={{ display: "flex", alignItems: "center", gap: "6px" }}>
                   <button
                     type="button"
                     onClick={(event) => {
@@ -439,30 +471,27 @@ export function ProjectNavigator({ selectedSampleId, onSelectSample }: ProjectNa
                       void toggleSamplePlayback(sample);
                     }}
                     style={{
-                      width: "34px",
-                      height: "34px",
-                      borderRadius: "50%",
-                      border: `1px solid ${theme.button.outline}`,
-                      background: playingId === sample.id ? theme.button.primary : theme.button.base,
-                      color: playingId === sample.id ? theme.button.primaryText : theme.text,
-                      fontWeight: 700,
-                      fontSize: "0.65rem",
+                      border: "none",
+                      background: "transparent",
+                      color: playingId === sample.id ? theme.button.primary : theme.text,
+                      fontSize: "0.68rem",
+                      fontWeight: 600,
                       cursor: "pointer",
-                      boxShadow: playingId === sample.id ? theme.cardGlow : "none"
+                      padding: 0
                     }}
                   >
-                    {playingId === sample.id ? "■" : "▶"}
+                    {playingId === sample.id ? "Stop" : "Play"}
                   </button>
-                  <div style={{ display: "flex", gap: "6px" }}>
+                  <div style={{ display: "flex", gap: "4px" }}>
                     {paletteChip.map((color) => (
                       <span
                         key={`${sample.id}-${color}`}
                         style={{
-                          width: "8px",
-                          height: "8px",
-                          borderRadius: "999px",
+                          width: "6px",
+                          height: "6px",
+                          borderRadius: "50%",
                           background: color,
-                          boxShadow: "0 0 12px rgba(0,0,0,0.35)"
+                          boxShadow: "0 0 6px rgba(0,0,0,0.35)"
                         }}
                       ></span>
                     ))}
@@ -473,10 +502,11 @@ export function ProjectNavigator({ selectedSampleId, onSelectSample }: ProjectNa
               {expanded && (
                 <div
                   style={{
+                    borderTop: `1px solid ${theme.border}`,
+                    padding: "8px 10px",
                     display: "flex",
                     flexDirection: "column",
-                    gap: "8px",
-                    marginTop: "10px"
+                    gap: "8px"
                   }}
                 >
                   <div
@@ -996,10 +1026,10 @@ export function ProjectNavigator({ selectedSampleId, onSelectSample }: ProjectNa
                   </details>
                 </div>
               )}
-            </li>
+            </div>
           );
         })}
-      </ul>
+      </div>
 
       {contextMenu && (
         <div
