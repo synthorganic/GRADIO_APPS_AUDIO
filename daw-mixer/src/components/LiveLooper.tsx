@@ -37,7 +37,8 @@ export function LiveLooper({ project }: LiveLooperProps) {
         position: project.samples.length * (60 / project.masterBpm * 4),
         length: loopLength * (60 / project.masterBpm * 4),
         isLooping: true,
-        effects: createDefaultTrackEffects()
+        effects: createDefaultTrackEffects(),
+        isInTimeline: true
       };
       dispatch({ type: "add-sample", projectId: currentProjectId, sample });
       setIsArmed(false);

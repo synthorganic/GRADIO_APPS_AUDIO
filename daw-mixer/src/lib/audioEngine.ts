@@ -27,6 +27,7 @@ export class AudioEngine {
   private onMeasure?: (measure: Measure) => void;
   private timelineOffset = 0;
   private rafId: number | null = null;
+  private stemChain: AudioNode[] = [];
 
   constructor(options: AudioEngineOptions = {}) {
     this.gainNode.connect(this.context.destination);
@@ -62,7 +63,7 @@ export class AudioEngine {
     this.stop(false);
     this.currentSource = this.context.createBufferSource();
     this.currentSource.buffer = buffer;
-    this.currentSource.connect(this.gainNode);
+    this.connectThroughChain(this.currentSource, []);
     this.startTime = this.context.currentTime;
     this.startOffset = 0;
     this.scheduledMeasures = measures ?? [];
@@ -93,7 +94,7 @@ export class AudioEngine {
     this.stop(false);
     this.currentSource = this.context.createBufferSource();
     this.currentSource.buffer = buffer;
-    this.currentSource.connect(this.gainNode);
+    this.connectThroughChain(this.currentSource, []);
     const { startOffset } = getPlaybackOffsets(target);
     const start = startOffset + segmentStart;
     this.currentSource.start(0, start, segmentDuration);
@@ -119,6 +120,7 @@ export class AudioEngine {
       this.currentSource.onended = null;
       this.currentSource = null;
     }
+    this.cleanupStemChain();
     this.finalizePlayback(emitEvent);
   }
 
@@ -154,11 +156,50 @@ export class AudioEngine {
     this.rafId = requestAnimationFrame(check);
   }
 
+  async playStem(
+    sample: SampleClip,
+    stem: StemInfo,
+    measures?: Measure[],
+    options: { timelineOffset?: number } = {}
+  ) {
+    await this.context.resume();
+    const buffer = await this.decodeSample(sample);
+    if (!buffer) return;
+
+    this.stop(false);
+    this.currentSource = this.context.createBufferSource();
+    this.currentSource.buffer = buffer;
+
+    const chain = this.buildStemChain(stem.type);
+    this.stemChain = chain;
+    this.connectThroughChain(this.currentSource, chain);
+
+    const { startOffset, duration } = getPlaybackOffsets(stem);
+    this.startTime = this.context.currentTime;
+    this.startOffset = startOffset ?? 0;
+    this.scheduledMeasures = measures ?? [];
+    this.timelineOffset = options.timelineOffset ?? 0;
+
+    if (duration !== undefined) {
+      this.currentSource.start(0, startOffset ?? 0, duration);
+    } else {
+      this.currentSource.start(0, startOffset ?? 0);
+    }
+
+    this.currentSource.onended = () => {
+      this.finalizePlayback();
+    };
+
+    this.dispatchPlayEvent();
+    this.watchMeasures();
+  }
+
   private finalizePlayback(emitEvent = true) {
     if (this.rafId !== null) {
       cancelAnimationFrame(this.rafId);
       this.rafId = null;
     }
+    this.cleanupStemChain();
     if (emitEvent) {
       this.dispatchStopEvent();
     }
@@ -166,6 +207,82 @@ export class AudioEngine {
     this.startOffset = 0;
     this.scheduledMeasures = [];
     this.timelineOffset = 0;
+  }
+
+  private cleanupStemChain() {
+    if (this.stemChain.length === 0) return;
+    this.stemChain.forEach((node) => {
+      try {
+        node.disconnect();
+      } catch (error) {
+        // Ignore disconnect errors when nodes are already detached.
+      }
+    });
+    this.stemChain = [];
+  }
+
+  private connectThroughChain(source: AudioNode, chain: AudioNode[]) {
+    this.stemChain = chain;
+    if (chain.length === 0) {
+      source.connect(this.gainNode);
+      return;
+    }
+    let previous: AudioNode = source;
+    chain.forEach((node) => {
+      previous.connect(node);
+      previous = node;
+    });
+    previous.connect(this.gainNode);
+  }
+
+  private buildStemChain(type: StemInfo["type"]): AudioNode[] {
+    const createFilter = (
+      filterType: BiquadFilterType,
+      frequency: number,
+      q = 0.8,
+      gain = 0
+    ): BiquadFilterNode => {
+      const filter = this.context.createBiquadFilter();
+      filter.type = filterType;
+      filter.frequency.value = frequency;
+      filter.Q.value = q;
+      if (filterType === "peaking" || filterType === "lowshelf" || filterType === "highshelf") {
+        filter.gain.value = gain;
+      }
+      return filter;
+    };
+
+    switch (type) {
+      case "vocals": {
+        const highPass = createFilter("highpass", 140, 0.7);
+        const presence = createFilter("peaking", 3200, 1.4, 6);
+        const air = createFilter("lowpass", 7800, 0.9);
+        return [highPass, presence, air];
+      }
+      case "leads": {
+        const body = createFilter("highpass", 260, 0.9);
+        const focus = createFilter("peaking", 1800, 1.1, 7);
+        const shimmer = createFilter("lowpass", 5200, 0.85);
+        return [body, focus, shimmer];
+      }
+      case "percussion": {
+        const snap = createFilter("highpass", 2000, 0.7);
+        const sparkle = createFilter("peaking", 5200, 1.2, 5);
+        return [snap, sparkle];
+      }
+      case "kicks": {
+        const thump = createFilter("lowshelf", 110, 0.7, 8);
+        const tighten = createFilter("lowpass", 220, 0.9);
+        return [thump, tighten];
+      }
+      case "bass": {
+        const lowCut = createFilter("highpass", 35, 0.8);
+        const warmth = createFilter("lowpass", 320, 0.85);
+        return [lowCut, warmth];
+      }
+      default:
+        return [];
+    }
   }
 
   private dispatchPlayEvent() {

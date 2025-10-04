@@ -7,6 +7,7 @@ export interface SliceOptions {
   position?: number;
   stems?: StemInfo[];
   isFragment?: boolean;
+  isInTimeline?: boolean;
 }
 
 export function sliceStemsForRange(
@@ -74,6 +75,7 @@ export function sliceSampleSegment(
     startOffset: (sample.startOffset ?? 0) + start,
     originSampleId: sample.originSampleId ?? sample.id,
     isFragment: options.isFragment ?? true,
+    isInTimeline: options.isInTimeline ?? true,
     retuneMap: sample.retuneMap,
     rekeyedAt: sample.rekeyedAt,
     effects: cloneTrackEffects(sample.effects)
