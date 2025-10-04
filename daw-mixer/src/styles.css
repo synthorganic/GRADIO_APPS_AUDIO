@@ -1,0 +1,21 @@
+:root {
+  font-family: "Montserrat", system-ui, sans-serif;
+  color: #eef8fb;
+  background-color: #03121a;
+  text-rendering: optimizeLegibility;
+}
+
+body {
+  margin: 0;
+  min-height: 100vh;
+  background: #03121a;
+  color: inherit;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+button {
+  font-family: inherit;
+}
