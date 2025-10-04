@@ -96,7 +96,8 @@ export function ProjectNavigator({ selectedSampleId, onSelectSample }: ProjectNa
           isLooping: false,
           startOffset: 0,
           isFragment: false,
-          effects: createDefaultTrackEffects()
+          effects: createDefaultTrackEffects(),
+          isInTimeline: true
         };
         dispatch({ type: "add-sample", projectId: currentProjectId, sample });
         void processSample(sample);
@@ -239,7 +240,7 @@ export function ProjectNavigator({ selectedSampleId, onSelectSample }: ProjectNa
       setPlayingId(null);
       return;
     }
-    await audioEngine.play(stem, sample.measures);
+    await audioEngine.playStem(sample, stem, sample.measures);
     setPlayingId(stem.id);
   };
 

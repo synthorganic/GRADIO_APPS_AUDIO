@@ -35,7 +35,6 @@ export function Timeline({ project, selectedSampleId, onSelectSample }: Timeline
   const { dispatch, currentProjectId } = useProjectStore();
   const scrollRef = useRef<HTMLDivElement | null>(null);
   const [snapResolution, setSnapResolution] = useState<SnapResolution>("measure");
-  const [clipMenu, setClipMenu] = useState<{ sampleId: string; x: number; y: number } | null>(null);
   const [playhead, setPlayhead] = useState<{ start: number; position: number } | null>(null);
   const [effectsSampleId, setEffectsSampleId] = useState<string | null>(null);
   const { processSample } = useDemucsProcessing((updated) => {
@@ -49,13 +48,18 @@ export function Timeline({ project, selectedSampleId, onSelectSample }: Timeline
 
   const secondsPerMeasure = useMemo(() => measureDurationSeconds(project), [project.masterBpm]);
 
+  const timelineSamples = useMemo(
+    () => project.samples.filter((sample) => sample.isInTimeline !== false),
+    [project.samples]
+  );
+
   const totalDuration = useMemo(() => {
-    const maxEnd = project.samples.reduce(
+    const maxEnd = timelineSamples.reduce(
       (acc, sample) => Math.max(acc, sample.position + sample.length),
       0
     );
     return Math.max(maxEnd, 16);
-  }, [project.samples]);
+  }, [timelineSamples]);
 
   const timelineGrid = useMemo(() => {
     const divisor = SNAP_DIVISORS[snapResolution];
@@ -235,35 +239,40 @@ export function Timeline({ project, selectedSampleId, onSelectSample }: Timeline
           type: "update-sample",
           projectId: currentProjectId,
           sampleId: sample.id,
-          sample: { position: dropPosition }
+          sample: { position: dropPosition, isInTimeline: true }
         });
         onSelectSample(sample.id);
       }
-    },
-    [currentProjectId, dispatch, onSelectSample, processSample, project.samples, projectDropPosition]
+  },
+  [currentProjectId, dispatch, onSelectSample, processSample, project.samples, projectDropPosition]
   );
 
-  useEffect(() => {
-    const closeMenu = () => setClipMenu(null);
-    window.addEventListener("click", closeMenu);
-    return () => window.removeEventListener("click", closeMenu);
-  }, []);
+  const handleRemoveClip = useCallback(
+    (sample: SampleClip) => {
+      if (sample.isFragment) {
+        dispatch({ type: "remove-sample", projectId: currentProjectId, sampleId: sample.id });
+      } else {
+        dispatch({
+          type: "update-sample",
+          projectId: currentProjectId,
+          sampleId: sample.id,
+          sample: { isInTimeline: false }
+        });
+      }
+      if (selectedSampleId === sample.id) {
+        onSelectSample(null);
+      }
+      if (effectsSampleId === sample.id) {
+        setEffectsSampleId(null);
+      }
+    },
+    [currentProjectId, dispatch, effectsSampleId, onSelectSample, selectedSampleId]
+  );
 
-  const handleClipContextMenu = (event: ReactMouseEvent, sampleId: string) => {
+  const handleClipContextMenu = (event: ReactMouseEvent, sample: SampleClip) => {
     event.preventDefault();
     event.stopPropagation();
-    setClipMenu({ sampleId, x: event.clientX, y: event.clientY });
-  };
-
-  const handleRemoveClip = (sampleId: string) => {
-    setClipMenu(null);
-    dispatch({ type: "remove-sample", projectId: currentProjectId, sampleId });
-    if (selectedSampleId === sampleId) {
-      onSelectSample(null);
-    }
-    if (effectsSampleId === sampleId) {
-      setEffectsSampleId(null);
-    }
+    handleRemoveClip(sample);
   };
 
   const playClip = (sample: SampleClip) => {
@@ -400,7 +409,7 @@ export function Timeline({ project, selectedSampleId, onSelectSample }: Timeline
             position: "relative"
           }}
         >
-          {project.samples.map((sample, index) => {
+          {timelineSamples.map((sample, index) => {
             const clipLabel = sample.variantLabel ? `${sample.name} — ${sample.variantLabel}` : sample.name;
             const widthMeasures = sample.length / secondsPerMeasure || 1;
             const clipWidth = Math.max(120, widthMeasures * MEASURE_WIDTH);
@@ -424,7 +433,7 @@ export function Timeline({ project, selectedSampleId, onSelectSample }: Timeline
                   width: `${clipWidth}px`
                 }}
                 onClick={() => onSelectSample(sample.id)}
-                onContextMenu={(event) => handleClipContextMenu(event, sample.id)}
+                onContextMenu={(event) => handleClipContextMenu(event, sample)}
               >
                 <div
                   style={{
@@ -546,39 +555,6 @@ export function Timeline({ project, selectedSampleId, onSelectSample }: Timeline
         </div>
       </div>
 
-      {clipMenu && (
-        <div
-          style={{
-            position: "fixed",
-            top: `${clipMenu.y}px`,
-            left: `${clipMenu.x}px`,
-            background: theme.surfaceOverlay,
-            border: `1px solid ${theme.button.outline}`,
-            borderRadius: "12px",
-            padding: "8px 0",
-            zIndex: 30,
-            minWidth: "160px",
-            boxShadow: theme.shadow
-          }}
-        >
-          <button
-            type="button"
-            style={{
-              width: "100%",
-              padding: "10px 14px",
-              background: "transparent",
-              border: "none",
-              color: theme.text,
-              textAlign: "left",
-              fontSize: "0.85rem",
-              cursor: "pointer"
-            }}
-            onClick={() => handleRemoveClip(clipMenu.sampleId)}
-          >
-            Remove from timeline
-          </button>
-        </div>
-      )}
       {effectsSampleId && (
         (() => {
           const target = project.samples.find((sample) => sample.id === effectsSampleId);

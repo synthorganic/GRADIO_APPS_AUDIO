@@ -127,6 +127,7 @@ export interface SampleClip {
   retuneMap?: string[];
   rekeyedAt?: string;
   effects: TrackEffects;
+  isInTimeline?: boolean;
 }
 
 export interface Beat {
