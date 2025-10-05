@@ -2746,7 +2746,7 @@ export function Timeline({ project, selectedSampleId, onSelectSample }: Timeline
               boxShadow: theme.cardGlow,
               padding: "16px 18px",
               color: theme.text,
-              zIndex: 38,
+              zIndex: 80,
             }}
           >
             <strong style={{ display: "block", fontSize: "0.82rem" }}>{sample.name}</strong>
