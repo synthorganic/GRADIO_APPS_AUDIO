@@ -28,6 +28,7 @@ import { useDemucsProcessing } from "../hooks/useDemucsProcessing";
 import { theme } from "../theme";
 import { sliceSampleSegment } from "../lib/sampleTools";
 import { TrackEffectsPanel } from "./TrackEffectsPanel";
+import { describeHeuristics, getStemEngineDefinition } from "../stem_engines";
 
 type SnapResolution = "measure" | "half-measure" | "beat" | "half-beat";
 
@@ -226,7 +227,7 @@ function ClipWaveform({ waveform }: { waveform: Float32Array }) {
 }
 
 export function Timeline({ project, selectedSampleId, onSelectSample }: TimelineProps) {
-  const { dispatch, currentProjectId, lastControlTarget } = useProjectStore();
+  const { dispatch, currentProjectId, lastControlTarget, preferences } = useProjectStore();
   const scrollRef = useRef<HTMLDivElement | null>(null);
   const channelRefs = useRef(new Map<string, HTMLDivElement>());
   const dragState = useRef<{
@@ -305,6 +306,10 @@ export function Timeline({ project, selectedSampleId, onSelectSample }: Timeline
     | null
   >(null);
   const pianoRollRef = useRef<HTMLDivElement | null>(null);
+  const [defaultNoteLengthSteps, setDefaultNoteLengthSteps] = useState(2);
+  const [timelineHoverInfo, setTimelineHoverInfo] = useState<
+    { sampleId: string; rect: DOMRect } | null
+  >(null);
 
   const findMidiChannelById = useCallback(
     (channelId: string) =>
@@ -402,6 +407,11 @@ export function Timeline({ project, selectedSampleId, onSelectSample }: Timeline
     return { channel, block };
   }, [findMidiChannelById, openMidiEditor]);
 
+  const demucsOptions = useMemo(
+    () => ({ engine: preferences.stemEngine, heuristics: preferences.heuristics }),
+    [preferences.heuristics, preferences.stemEngine],
+  );
+
   const { processSample } = useDemucsProcessing((updated) => {
     dispatch({
       type: "update-sample",
@@ -409,7 +419,17 @@ export function Timeline({ project, selectedSampleId, onSelectSample }: Timeline
       sampleId: updated.id,
       sample: updated,
     });
-  });
+  }, demucsOptions);
+
+  const engineDefinition = useMemo(
+    () => getStemEngineDefinition(preferences.stemEngine),
+    [preferences.stemEngine],
+  );
+
+  const heuristicSummary = useMemo(
+    () => describeHeuristics(engineDefinition, preferences.heuristics),
+    [engineDefinition, preferences.heuristics],
+  );
 
   const updateViewportWidth = useCallback(() => {
     const current = scrollRef.current;
@@ -460,6 +480,30 @@ export function Timeline({ project, selectedSampleId, onSelectSample }: Timeline
     () => secondsPerMeasure / MIDI_GRID_DIVISOR,
     [secondsPerMeasure],
   );
+
+  const defaultNoteLength = useMemo(
+    () => Math.max(1, defaultNoteLengthSteps) * midiGridDuration,
+    [defaultNoteLengthSteps, midiGridDuration],
+  );
+
+  const defaultNoteLengthBeats = useMemo(
+    () => (defaultNoteLength / secondsPerMeasure) * 4,
+    [defaultNoteLength, secondsPerMeasure],
+  );
+
+  const incrementNoteLength = useCallback(() => {
+    setDefaultNoteLengthSteps((value) => Math.min(32, value + 1));
+  }, []);
+
+  const decrementNoteLength = useCallback(() => {
+    setDefaultNoteLengthSteps((value) => Math.max(1, value - 1));
+  }, []);
+
+  const handleNoteLengthInput = useCallback((event: ChangeEvent<HTMLInputElement>) => {
+    const next = Number.parseInt(event.target.value, 10);
+    if (!Number.isFinite(next)) return;
+    setDefaultNoteLengthSteps(Math.max(1, Math.min(32, next)));
+  }, []);
 
   useEffect(() => {
     const defaultChannel = project.channels.find((channel) => channel.type === "audio");
@@ -646,6 +690,16 @@ export function Timeline({ project, selectedSampleId, onSelectSample }: Timeline
       window.removeEventListener("click", closeMidiMenu);
     };
   }, []);
+
+  useEffect(() => {
+    if (!timelineHoverInfo) return;
+    const exists = project.samples.some(
+      (sample) => sample.id === timelineHoverInfo.sampleId && sample.isInTimeline !== false,
+    );
+    if (!exists) {
+      setTimelineHoverInfo(null);
+    }
+  }, [project.samples, timelineHoverInfo]);
 
   useEffect(() => {
     if (!midiMenu) return;
@@ -1154,6 +1208,7 @@ export function Timeline({ project, selectedSampleId, onSelectSample }: Timeline
 
   const handlePianoNotePointerDown = useCallback(
     (event: ReactPointerEvent<HTMLDivElement>, channelId: string, block: MidiBlock, note: MidiNote) => {
+      if (event.button !== 0) return;
       event.stopPropagation();
       pianoRollDrag.current = {
         noteId: note.id,
@@ -1208,6 +1263,54 @@ export function Timeline({ project, selectedSampleId, onSelectSample }: Timeline
       event.currentTarget.releasePointerCapture(event.pointerId);
     }
   }, []);
+
+  const handlePianoRollPointerDown = useCallback(
+    (event: ReactPointerEvent<HTMLDivElement>, channelId: string, block: MidiBlock) => {
+      if (event.button !== 0) return;
+      event.stopPropagation();
+      const target = event.target as HTMLElement;
+      if (target.closest("[data-midi-note-id]")) return;
+      if (!pianoRollRef.current) return;
+      const bounds = pianoRollRef.current.getBoundingClientRect();
+      const clampedX = Math.max(0, Math.min(event.clientX - bounds.left, bounds.width));
+      const clampedY = Math.max(0, Math.min(event.clientY - bounds.top, bounds.height));
+      const totalSteps =
+        bounds.width > 0
+          ? Math.round((clampedX / bounds.width) * (block.length / midiGridDuration))
+          : 0;
+      const maxStartStep = Math.max(0, Math.floor(block.length / midiGridDuration));
+      const startSteps = Math.min(totalSteps, maxStartStep);
+      let start = startSteps * midiGridDuration;
+      if (start > block.length - MIN_NOTE_DURATION) {
+        start = Math.max(0, block.length - midiGridDuration);
+      }
+      const remaining = Math.max(0, block.length - start);
+      if (remaining <= MIN_NOTE_DURATION) {
+        return;
+      }
+      const desiredSteps = Math.max(1, defaultNoteLengthSteps);
+      const maxUsableSteps = Math.max(1, Math.floor(remaining / midiGridDuration));
+      const lengthSteps = Math.min(desiredSteps, maxUsableSteps);
+      const length =
+        remaining < midiGridDuration
+          ? remaining
+          : Math.max(midiGridDuration, lengthSteps * midiGridDuration);
+      const pitchRatio = bounds.height > 0 ? 1 - clampedY / bounds.height : 0;
+      const pitch = Math.round(MIDI_LOW + pitchRatio * (MIDI_HIGH - MIDI_LOW));
+      const clampedPitch = Math.max(MIDI_LOW, Math.min(MIDI_HIGH, pitch));
+      const note: MidiNote = {
+        id: nanoid(),
+        blockId: block.id,
+        start,
+        length: Math.min(length, Math.max(MIN_NOTE_DURATION, block.length - start)),
+        pitch: clampedPitch,
+        velocity: 0.85,
+        sampleId: block.sampleId,
+      };
+      addNoteToBlock(channelId, block.id, note);
+    },
+    [addNoteToBlock, defaultNoteLengthSteps, midiGridDuration],
+  );
 
   const handleChannelDrop = useCallback(
     (channel: TimelineChannel, event: DragEvent<HTMLDivElement>) => {
@@ -1426,6 +1529,11 @@ export function Timeline({ project, selectedSampleId, onSelectSample }: Timeline
     void audioEngine.play(sample, sample.measures, { emitTimelineEvents: false });
   }, []);
 
+  const updateTimelineHover = useCallback((sampleId: string, element: HTMLElement | null) => {
+    if (!element) return;
+    setTimelineHoverInfo({ sampleId, rect: element.getBoundingClientRect() });
+  }, []);
+
   const handleClipPointerDown = useCallback(
     (event: ReactPointerEvent<HTMLDivElement>, sample: SampleClip) => {
       if (!sample.channelId) return;
@@ -1441,8 +1549,9 @@ export function Timeline({ project, selectedSampleId, onSelectSample }: Timeline
         originPosition: sample.position,
         channelId: sample.channelId,
       };
+      updateTimelineHover(sample.id, event.currentTarget);
     },
-    [setClipMenu],
+    [setClipMenu, updateTimelineHover],
   );
 
   const handleClipPointerMove = useCallback(
@@ -1469,8 +1578,9 @@ export function Timeline({ project, selectedSampleId, onSelectSample }: Timeline
           sample: { position: newPositionSeconds },
         });
       }
+      updateTimelineHover(sample.id, event.currentTarget);
     },
-    [currentProjectId, dispatch, measureWidth, secondsPerMeasure, snapResolution],
+    [currentProjectId, dispatch, measureWidth, secondsPerMeasure, snapResolution, updateTimelineHover],
   );
 
   const handleClipPointerUp = useCallback(
@@ -1495,8 +1605,9 @@ export function Timeline({ project, selectedSampleId, onSelectSample }: Timeline
           break;
         }
       }
+      updateTimelineHover(sample.id, event.currentTarget);
     },
-    [currentProjectId, dispatch, project.channels],
+    [currentProjectId, dispatch, project.channels, updateTimelineHover],
   );
 
   const handleRemoveClip = useCallback(
@@ -1970,6 +2081,62 @@ export function Timeline({ project, selectedSampleId, onSelectSample }: Timeline
               <option value="half-beat">1/2 beat</option>
             </select>
           </label>
+          <div style={{ display: "flex", alignItems: "center", gap: "6px" }}>
+            <span style={{ fontSize: "0.72rem" }}>Note Len</span>
+            <button
+              type="button"
+              onClick={decrementNoteLength}
+              style={{
+                width: "24px",
+                height: "24px",
+                borderRadius: "6px",
+                border: `1px solid ${theme.button.outline}`,
+                background: theme.surface,
+                color: theme.text,
+                fontSize: "0.8rem",
+                cursor: "pointer",
+              }}
+            >
+              -
+            </button>
+            <input
+              type="number"
+              min={1}
+              max={32}
+              value={defaultNoteLengthSteps}
+              onChange={handleNoteLengthInput}
+              aria-label="Default MIDI note length"
+              style={{
+                width: "48px",
+                padding: "4px 6px",
+                borderRadius: "6px",
+                border: `1px solid ${theme.button.outline}`,
+                background: theme.surfaceOverlay,
+                color: theme.text,
+                fontSize: "0.72rem",
+                textAlign: "center",
+              }}
+            />
+            <button
+              type="button"
+              onClick={incrementNoteLength}
+              style={{
+                width: "24px",
+                height: "24px",
+                borderRadius: "6px",
+                border: `1px solid ${theme.button.outline}`,
+                background: theme.surface,
+                color: theme.text,
+                fontSize: "0.8rem",
+                cursor: "pointer",
+              }}
+            >
+              +
+            </button>
+            <span style={{ fontSize: "0.68rem", color: theme.textMuted }}>
+              {defaultNoteLengthBeats.toFixed(2)} beats
+            </span>
+          </div>
           <div style={{ display: "flex", gap: "6px" }}>
             <button
               type="button"
@@ -2237,6 +2404,13 @@ export function Timeline({ project, selectedSampleId, onSelectSample }: Timeline
                               event.stopPropagation();
                               playClip(sample);
                             }}
+                            onMouseEnter={(event) => updateTimelineHover(sample.id, event.currentTarget)}
+                            onMouseMove={(event) => updateTimelineHover(sample.id, event.currentTarget)}
+                            onMouseLeave={() =>
+                              setTimelineHoverInfo((current) =>
+                                current?.sampleId === sample.id ? null : current,
+                              )
+                            }
                             title={`${clipLabel} • ${sample.length.toFixed(2)}s`}
                           >
                             <div
@@ -2528,6 +2702,87 @@ export function Timeline({ project, selectedSampleId, onSelectSample }: Timeline
         );
       })()}
 
+      {timelineHoverInfo && typeof window !== "undefined" && (() => {
+        const sample = project.samples.find((item) => item.id === timelineHoverInfo.sampleId);
+        if (!sample) return null;
+        const cardWidth = 260;
+        const cardHeight = 188;
+        const scrollX = window.scrollX ?? 0;
+        const scrollY = window.scrollY ?? 0;
+        const rect = timelineHoverInfo.rect;
+        let left = rect.left + rect.width + scrollX + 16;
+        if (left + cardWidth > scrollX + window.innerWidth - 16) {
+          left = Math.max(scrollX + 16, rect.left + scrollX - cardWidth - 16);
+        }
+        let top = rect.top + scrollY - 12;
+        if (top < scrollY + 16) {
+          top = scrollY + 16;
+        }
+        if (top + cardHeight > scrollY + window.innerHeight - 16) {
+          top = scrollY + window.innerHeight - cardHeight - 16;
+        }
+        const channel = sample.channelId
+          ? project.channels.find((channelItem) => channelItem.id === sample.channelId)
+          : undefined;
+        const percussionNotes =
+          heuristicSummary.percussion.length > 0
+            ? heuristicSummary.percussion.join(" • ")
+            : "Disabled";
+        const vocalNotes =
+          heuristicSummary.vocals.length > 0
+            ? heuristicSummary.vocals.join(" • ")
+            : "Disabled";
+        return (
+          <div
+            style={{
+              position: "fixed",
+              top: `${top}px`,
+              left: `${left}px`,
+              width: `${cardWidth}px`,
+              pointerEvents: "none",
+              background: "rgba(6, 16, 23, 0.92)",
+              borderRadius: "14px",
+              border: `1px solid ${theme.button.outline}`,
+              boxShadow: theme.cardGlow,
+              padding: "16px 18px",
+              color: theme.text,
+              zIndex: 38,
+            }}
+          >
+            <strong style={{ display: "block", fontSize: "0.82rem" }}>{sample.name}</strong>
+            {sample.variantLabel && (
+              <span style={{ fontSize: "0.7rem", color: theme.textMuted }}>
+                {sample.variantLabel}
+              </span>
+            )}
+            <dl
+              style={{
+                display: "grid",
+                gridTemplateColumns: "auto 1fr",
+                gap: "4px 12px",
+                margin: "10px 0 0",
+                fontSize: "0.7rem",
+              }}
+            >
+              <dt style={{ color: theme.textMuted, margin: 0 }}>Start</dt>
+              <dd style={{ margin: 0 }}>{sample.position.toFixed(2)}s</dd>
+              <dt style={{ color: theme.textMuted, margin: 0 }}>Length</dt>
+              <dd style={{ margin: 0 }}>{sample.length.toFixed(2)}s</dd>
+              <dt style={{ color: theme.textMuted, margin: 0 }}>Channel</dt>
+              <dd style={{ margin: 0 }}>{channel ? channel.name : "Unassigned"}</dd>
+              <dt style={{ color: theme.textMuted, margin: 0 }}>Stems</dt>
+              <dd style={{ margin: 0 }}>{sample.stems.length}</dd>
+              <dt style={{ color: theme.textMuted, margin: 0 }}>Engine</dt>
+              <dd style={{ margin: 0 }}>{engineDefinition.name}</dd>
+              <dt style={{ color: theme.textMuted, margin: 0 }}>Percussion</dt>
+              <dd style={{ margin: 0 }}>{percussionNotes}</dd>
+              <dt style={{ color: theme.textMuted, margin: 0 }}>Vocals</dt>
+              <dd style={{ margin: 0 }}>{vocalNotes}</dd>
+            </dl>
+          </div>
+        );
+      })()}
+
       {midiEditorContext && (() => {
         const { channel: midiChannel, block: midiBlock } = midiEditorContext;
         const blockSample = midiBlock.sampleId
@@ -2653,8 +2908,10 @@ export function Timeline({ project, selectedSampleId, onSelectSample }: Timeline
                     background: "rgba(3, 14, 9, 0.7)",
                     overflow: "hidden",
                   }}
+                  onPointerDown={(event) => handlePianoRollPointerDown(event, midiChannel.id, midiBlock)}
                   onPointerMove={handlePianoNotePointerMove}
                   onPointerUp={handlePianoNotePointerUp}
+                  onContextMenu={(event) => event.preventDefault()}
                 >
                   {Array.from({ length: gridColumns + 1 }).map((_, index) => (
                     <div
@@ -2706,8 +2963,13 @@ export function Timeline({ project, selectedSampleId, onSelectSample }: Timeline
                     return (
                       <div
                         key={note.id}
+                        data-midi-note-id={note.id}
                         onPointerDown={(event) => handlePianoNotePointerDown(event, midiChannel.id, midiBlock, note)}
-                        onDoubleClick={() => removeNoteFromBlock(midiChannel.id, midiBlock.id, note.id)}
+                        onContextMenu={(event) => {
+                          event.preventDefault();
+                          event.stopPropagation();
+                          removeNoteFromBlock(midiChannel.id, midiBlock.id, note.id);
+                        }}
                         style={{
                           position: "absolute",
                           top: `calc(${topPercent}% - 10px)`,

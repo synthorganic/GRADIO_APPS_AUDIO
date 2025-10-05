@@ -1,8 +1,12 @@
 import { useCallback, useState } from "react";
 import { attachDemucsToSample, runDemucs } from "../lib/demucsClient";
 import type { SampleClip } from "../types";
+import { DEFAULT_ENGINE_ID, DEFAULT_HEURISTICS, type StemProcessingOptions } from "../stem_engines";
 
-export function useDemucsProcessing(onComplete?: (sample: SampleClip) => void) {
+export function useDemucsProcessing(
+  onComplete?: (sample: SampleClip) => void,
+  options?: StemProcessingOptions,
+) {
   const [isProcessing, setIsProcessing] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
@@ -12,7 +16,11 @@ export function useDemucsProcessing(onComplete?: (sample: SampleClip) => void) {
       setIsProcessing(true);
       setError(null);
       try {
-        const result = await runDemucs(sample.file);
+        const runtimeOptions = options ?? {
+          engine: DEFAULT_ENGINE_ID,
+          heuristics: DEFAULT_HEURISTICS,
+        };
+        const result = await runDemucs(sample.file, runtimeOptions);
         const updated = attachDemucsToSample(sample, result);
         onComplete?.(updated);
         return updated;
@@ -23,7 +31,7 @@ export function useDemucsProcessing(onComplete?: (sample: SampleClip) => void) {
         setIsProcessing(false);
       }
     },
-    [isProcessing, onComplete]
+    [isProcessing, onComplete, options]
   );
 
   return { isProcessing, error, processSample };

@@ -11,6 +11,26 @@ import type {
   TimelineChannel,
 } from "../types";
 import { theme } from "../theme";
+import {
+  DEFAULT_ENGINE_ID,
+  DEFAULT_HEURISTICS,
+  cloneHeuristics,
+  type StemEngineId,
+  type StemHeuristicSettings,
+} from "../stem_engines";
+
+export interface Preferences {
+  stemEngine: StemEngineId;
+  heuristics: StemHeuristicSettings;
+}
+
+export type PreferencesUpdate = {
+  stemEngine?: StemEngineId;
+  heuristics?: {
+    percussion?: Partial<StemHeuristicSettings["percussion"]>;
+    vocals?: Partial<StemHeuristicSettings["vocals"]>;
+  };
+};
 
 export type ProjectAction =
   | { type: "add-sample"; projectId: string; sample: SampleClip }
@@ -30,7 +50,8 @@ export type ProjectAction =
         | Partial<MidiChannel>;
     }
   | { type: "set-scale"; projectId: string; scale: string }
-  | { type: "register-control-change"; target: AutomationTarget | null };
+  | { type: "register-control-change"; target: AutomationTarget | null }
+  | { type: "update-preferences"; payload: PreferencesUpdate };
 
 export interface AutomationTarget {
   id: string;
@@ -43,6 +64,7 @@ interface ProjectState {
   currentProjectId: string;
   projects: Record<string, Project>;
   lastControlTarget: AutomationTarget | null;
+  preferences: Preferences;
 }
 
 const rainbowPalette: Record<StemInfo["type"], string> = {
@@ -82,12 +104,18 @@ const initialProject: Project = {
   }
 };
 
+const initialPreferences: Preferences = {
+  stemEngine: DEFAULT_ENGINE_ID,
+  heuristics: cloneHeuristics(DEFAULT_HEURISTICS),
+};
+
 const initialState: ProjectState = {
   currentProjectId: initialProject.id,
   projects: {
     [initialProject.id]: initialProject
   },
-  lastControlTarget: null
+  lastControlTarget: null,
+  preferences: initialPreferences,
 };
 
 function reducer(state: ProjectState, action: ProjectAction): ProjectState {
@@ -99,7 +127,8 @@ function reducer(state: ProjectState, action: ProjectAction): ProjectState {
           ...state.projects,
           [action.project.id]: action.project
         },
-        lastControlTarget: state.lastControlTarget
+        lastControlTarget: state.lastControlTarget,
+        preferences: state.preferences
       };
     }
     case "set-project": {
@@ -109,7 +138,8 @@ function reducer(state: ProjectState, action: ProjectAction): ProjectState {
           ...state.projects,
           [action.project.id]: action.project
         },
-        lastControlTarget: state.lastControlTarget
+        lastControlTarget: state.lastControlTarget,
+        preferences: state.preferences
       };
     }
     case "add-sample": {
@@ -259,6 +289,26 @@ function reducer(state: ProjectState, action: ProjectAction): ProjectState {
       return {
         ...state,
         lastControlTarget: action.target
+      };
+    }
+    case "update-preferences": {
+      const nextStemEngine = action.payload.stemEngine ?? state.preferences.stemEngine;
+      const nextHeuristics = {
+        percussion: {
+          ...state.preferences.heuristics.percussion,
+          ...(action.payload.heuristics?.percussion ?? {}),
+        },
+        vocals: {
+          ...state.preferences.heuristics.vocals,
+          ...(action.payload.heuristics?.vocals ?? {}),
+        },
+      } as Preferences["heuristics"];
+      return {
+        ...state,
+        preferences: {
+          stemEngine: nextStemEngine,
+          heuristics: nextHeuristics,
+        },
       };
     }
     default:
