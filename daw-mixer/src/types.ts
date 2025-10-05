@@ -119,11 +119,23 @@ export interface AutomationPoint {
 
 export interface MidiNote {
   id: string;
+  blockId: string;
   start: number;
   length: number;
   pitch: number;
   velocity: number;
   sampleId?: string;
+}
+
+export interface MidiBlock {
+  id: string;
+  start: number;
+  length: number;
+  notes: MidiNote[];
+  rootNote: number;
+  baseMidi?: number;
+  sampleId?: string;
+  harmonicSource?: string;
 }
 
 export interface TimelineChannelBase {
@@ -150,7 +162,8 @@ export interface AutomationChannel extends TimelineChannelBase {
 export interface MidiChannel extends TimelineChannelBase {
   type: "midi";
   instrument: string;
-  notes: MidiNote[];
+  blocks: MidiBlock[];
+  blockSizeMeasures: number;
 }
 
 export type TimelineChannel = AudioChannel | AutomationChannel | MidiChannel;

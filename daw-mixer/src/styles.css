@@ -19,3 +19,56 @@ body {
 button {
   font-family: inherit;
 }
+
+.timeline-zoom-slider {
+  --timeline-zoom-color: #4cc7c2;
+  width: 160px;
+  max-width: 220px;
+  appearance: none;
+  height: 6px;
+  border-radius: 999px;
+  background: rgba(76, 199, 194, 0.2);
+  outline: none;
+  cursor: pointer;
+  transition: background 0.2s ease;
+}
+
+.timeline-zoom-slider:hover {
+  background: rgba(76, 199, 194, 0.28);
+}
+
+.timeline-zoom-slider:focus-visible {
+  box-shadow: 0 0 0 2px rgba(76, 199, 194, 0.35);
+}
+
+.timeline-zoom-slider::-webkit-slider-runnable-track {
+  height: 6px;
+  border-radius: 999px;
+  background: rgba(76, 199, 194, 0.2);
+}
+
+.timeline-zoom-slider::-webkit-slider-thumb {
+  appearance: none;
+  width: 16px;
+  height: 16px;
+  border-radius: 50%;
+  background: var(--timeline-zoom-color);
+  border: 2px solid rgba(3, 18, 26, 0.6);
+  box-shadow: 0 0 0 2px rgba(76, 199, 194, 0.2);
+  margin-top: -5px;
+}
+
+.timeline-zoom-slider::-moz-range-track {
+  height: 6px;
+  border-radius: 999px;
+  background: rgba(76, 199, 194, 0.2);
+}
+
+.timeline-zoom-slider::-moz-range-thumb {
+  width: 16px;
+  height: 16px;
+  border-radius: 50%;
+  background: var(--timeline-zoom-color);
+  border: 2px solid rgba(3, 18, 26, 0.6);
+  box-shadow: 0 0 0 2px rgba(76, 199, 194, 0.2);
+}
