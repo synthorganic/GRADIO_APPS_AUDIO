@@ -1,5 +1,5 @@
-import { useEffect, useMemo, useState, type CSSProperties } from "react";
-import { ProjectProvider, useProjectStore } from "./state/ProjectStore";
+import { useCallback, useEffect, useMemo, useState, type CSSProperties } from "react";
+import { ProjectProvider, useProjectStore, type PreferencesUpdate } from "./state/ProjectStore";
 import { ProjectNavigator } from "./components/ProjectNavigator";
 import { Timeline } from "./components/Timeline";
 import { MasterControls } from "./components/MasterControls";
@@ -12,14 +12,16 @@ import { MixerPanel } from "./components/MixerPanel";
 import { audioEngine } from "./lib/audioEngine";
 import { TopMenu } from "./components/TopMenu";
 import soniqLogo from "./assets/soniq-logo.svg";
+import { SettingsDialog } from "./components/SettingsDialog";
 
 type FloatingPanel = "mixer" | "vst" | "sample";
 
 function AppShell() {
-  const { currentProjectId, projects } = useProjectStore();
+  const { currentProjectId, projects, dispatch, preferences } = useProjectStore();
   const project = projects[currentProjectId];
   const [selectedSampleId, setSelectedSampleId] = useState<string | null>(null);
   const [activePanel, setActivePanel] = useState<FloatingPanel | null>(null);
+  const [isSettingsOpen, setIsSettingsOpen] = useState(false);
 
   const selectedSample = useMemo<SampleClip | null>(() => {
     if (!selectedSampleId) return null;
@@ -29,6 +31,11 @@ function AppShell() {
   useEffect(() => {
     audioEngine.syncChannelMix(project.channels);
   }, [project.channels]);
+
+  const handleUpdatePreferences = useCallback(
+    (update: PreferencesUpdate) => dispatch({ type: "update-preferences", payload: update }),
+    [dispatch],
+  );
 
   const panelTitle: Record<FloatingPanel, string> = {
     mixer: "Mixer",
@@ -82,7 +89,7 @@ function AppShell() {
         }}
       >
         <div style={{ display: "flex", alignItems: "center", gap: "18px" }}>
-          <TopMenu />
+          <TopMenu onOpenSettings={() => setIsSettingsOpen(true)} />
           <img
             src={soniqLogo}
             alt="SONiQ"
@@ -212,6 +219,13 @@ function AppShell() {
           </div>
         </div>
       )}
+
+      <SettingsDialog
+        isOpen={isSettingsOpen}
+        preferences={preferences}
+        onClose={() => setIsSettingsOpen(false)}
+        onUpdate={handleUpdatePreferences}
+      />
     </div>
   );
 }

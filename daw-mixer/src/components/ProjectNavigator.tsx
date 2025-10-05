@@ -21,6 +21,7 @@ import {
   sliceStemsForRange
 } from "../lib/sampleTools";
 import { createDefaultTrackEffects } from "../lib/effectPresets";
+import { describeHeuristics, getStemEngineDefinition } from "../stem_engines";
 
 interface ProjectNavigatorProps {
   selectedSampleId: string | null;
@@ -54,13 +55,27 @@ function getMeasureDuration(measure: Measure) {
 }
 
 export function ProjectNavigator({ selectedSampleId, onSelectSample }: ProjectNavigatorProps) {
-  const { currentProjectId, projects, dispatch, getPalette } = useProjectStore();
+  const { currentProjectId, projects, dispatch, getPalette, preferences } = useProjectStore();
   const project = projects[currentProjectId];
   const palette = getPalette();
   const inputRef = useRef<HTMLInputElement | null>(null);
+  const demucsOptions = useMemo(
+    () => ({ engine: preferences.stemEngine, heuristics: preferences.heuristics }),
+    [preferences.heuristics, preferences.stemEngine]
+  );
   const { processSample, isProcessing } = useDemucsProcessing((updated) => {
     dispatch({ type: "update-sample", projectId: currentProjectId, sampleId: updated.id, sample: updated });
-  });
+  }, demucsOptions);
+
+  const engineDefinition = useMemo(
+    () => getStemEngineDefinition(preferences.stemEngine),
+    [preferences.stemEngine]
+  );
+
+  const heuristicSummary = useMemo(
+    () => describeHeuristics(engineDefinition, preferences.heuristics),
+    [engineDefinition, preferences.heuristics]
+  );
 
   const [expandedSamples, setExpandedSamples] = useState<Record<string, boolean>>({});
   const [playingId, setPlayingId] = useState<string | null>(null);
@@ -1189,6 +1204,20 @@ export function ProjectNavigator({ selectedSampleId, onSelectSample }: ProjectNa
                     <dd style={valueStyle}>{channel ? channel.name : "Unassigned"}</dd>
                     <dt style={labelStyle}>Waveform</dt>
                     <dd style={valueStyle}>{waveformStatus}</dd>
+                    <dt style={labelStyle}>Stem Engine</dt>
+                    <dd style={valueStyle}>{engineDefinition.name}</dd>
+                    <dt style={labelStyle}>Percussion</dt>
+                    <dd style={valueStyle}>
+                      {heuristicSummary.percussion.length > 0
+                        ? heuristicSummary.percussion.join(" • ")
+                        : "Disabled"}
+                    </dd>
+                    <dt style={labelStyle}>Vocals</dt>
+                    <dd style={valueStyle}>
+                      {heuristicSummary.vocals.length > 0
+                        ? heuristicSummary.vocals.join(" • ")
+                        : "Disabled"}
+                    </dd>
                   </dl>
                 </>
               );

@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { theme } from "../theme";
 
 type MenuKey = "File" | "Edit";
@@ -6,25 +6,33 @@ type MenuKey = "File" | "Edit";
 interface MenuItem {
   label: string;
   hint?: string;
+  action?: () => void;
 }
 
-const menuConfig: Record<MenuKey, MenuItem[]> = {
-  File: [
-    { label: "New Project" },
-    { label: "Open Project…" },
-    { label: "Save Project" },
-    { label: "Export Mixdown…" }
-  ],
-  Edit: [
-    { label: "Undo" },
-    { label: "Redo" },
-    { label: "Settings", hint: "Sample Rate, Playback Device, …" }
-  ]
-};
+interface TopMenuProps {
+  onOpenSettings: () => void;
+}
 
-export function TopMenu() {
+export function TopMenu({ onOpenSettings }: TopMenuProps) {
   const [openMenu, setOpenMenu] = useState<MenuKey | null>(null);
   const containerRef = useRef<HTMLDivElement>(null);
+
+  const menuConfig = useMemo<Record<MenuKey, MenuItem[]>>(
+    () => ({
+      File: [
+        { label: "New Project" },
+        { label: "Open Project…" },
+        { label: "Save Project" },
+        { label: "Export Mixdown…" }
+      ],
+      Edit: [
+        { label: "Undo" },
+        { label: "Redo" },
+        { label: "Settings", hint: "Sample Rate, Playback Device, …", action: onOpenSettings }
+      ]
+    }),
+    [onOpenSettings]
+  );
 
   useEffect(() => {
     const handleClickAway = (event: MouseEvent) => {
@@ -92,7 +100,10 @@ export function TopMenu() {
                   key={item.label}
                   type="button"
                   role="menuitem"
-                  onClick={() => setOpenMenu(null)}
+                  onClick={() => {
+                    setOpenMenu(null);
+                    item.action?.();
+                  }}
                   style={{
                     display: "flex",
                     flexDirection: "column",
