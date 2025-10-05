@@ -1357,7 +1357,7 @@ export function ProjectNavigator({ selectedSampleId, onSelectSample }: ProjectNa
               padding: "14px 16px",
               boxShadow: theme.shadow,
               color: theme.text,
-              zIndex: 40,
+              zIndex: 80,
               pointerEvents: "none"
             }}
           >
@@ -1376,7 +1376,7 @@ export function ProjectNavigator({ selectedSampleId, onSelectSample }: ProjectNa
             border: `1px solid ${theme.button.outline}`,
             borderRadius: "12px",
             padding: "8px 0",
-            zIndex: 20,
+            zIndex: 80,
             minWidth: "180px",
             boxShadow: theme.shadow
           }}
@@ -1521,7 +1521,7 @@ export function ProjectNavigator({ selectedSampleId, onSelectSample }: ProjectNa
             border: `1px solid ${theme.button.outline}`,
             borderRadius: "12px",
             padding: "8px 0",
-            zIndex: 20,
+            zIndex: 80,
             minWidth: "180px",
             boxShadow: theme.shadow
           }}
