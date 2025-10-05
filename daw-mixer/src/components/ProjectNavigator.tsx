@@ -99,7 +99,7 @@ export function ProjectNavigator({ selectedSampleId, onSelectSample }: ProjectNa
           startOffset: 0,
           isFragment: false,
           effects: createDefaultTrackEffects(),
-          isInTimeline: true,
+          isInTimeline: false,
           channelId: defaultChannelId
         };
         dispatch({ type: "add-sample", projectId: currentProjectId, sample });
@@ -135,7 +135,7 @@ export function ProjectNavigator({ selectedSampleId, onSelectSample }: ProjectNa
       setPlayingId(null);
       return;
     }
-    await audioEngine.play(sample, sample.measures, { emitTimelineEvents: false });
+    await audioEngine.play(sample, sample.measures, { emitTimelineEvents: false, loop: true });
     setPlayingId(sample.id);
   };
 
@@ -147,7 +147,10 @@ export function ProjectNavigator({ selectedSampleId, onSelectSample }: ProjectNa
       setPlayingId(null);
       return;
     }
-    await audioEngine.playSegment(sample, measure.start, segmentDuration, { emitTimelineEvents: false });
+    await audioEngine.playSegment(sample, measure.start, segmentDuration, {
+      emitTimelineEvents: false,
+      loop: true
+    });
     setPlayingId(measure.id);
   };
 
@@ -285,7 +288,10 @@ export function ProjectNavigator({ selectedSampleId, onSelectSample }: ProjectNa
       setPlayingId(null);
       return;
     }
-    await audioEngine.playStem(sample, stem, sample.measures, { emitTimelineEvents: false });
+    await audioEngine.playStem(sample, stem, sample.measures, {
+      emitTimelineEvents: false,
+      loop: true
+    });
     setPlayingId(stem.id);
   };
 
@@ -297,7 +303,10 @@ export function ProjectNavigator({ selectedSampleId, onSelectSample }: ProjectNa
       setPlayingId(null);
       return;
     }
-    await audioEngine.playSegment(sample, beat.start, duration, { emitTimelineEvents: false });
+    await audioEngine.playSegment(sample, beat.start, duration, {
+      emitTimelineEvents: false,
+      loop: true
+    });
     setPlayingId(beat.id);
   };
 
@@ -309,7 +318,7 @@ export function ProjectNavigator({ selectedSampleId, onSelectSample }: ProjectNa
         padding: "12px 16px",
         display: "flex",
         flexDirection: "column",
-        gap: "10px",
+          gap: "14px",
         background: theme.surface,
         borderBottom: `1px solid ${theme.divider}`,
         color: theme.text
@@ -397,7 +406,7 @@ export function ProjectNavigator({ selectedSampleId, onSelectSample }: ProjectNa
         style={{
           display: "flex",
           flexDirection: "column",
-          gap: "6px",
+          gap: "10px",
           padding: 0,
           margin: 0,
           overflowY: "auto"
@@ -411,7 +420,7 @@ export function ProjectNavigator({ selectedSampleId, onSelectSample }: ProjectNa
               key={sample.id}
               style={{
                 background: isSelected ? theme.surfaceRaised : theme.surfaceOverlay,
-                borderRadius: "6px",
+                borderRadius: "12px",
                 border: `1px solid ${isSelected ? theme.button.primary : theme.border}`,
                 boxShadow: isSelected ? theme.cardGlow : "none",
                 transition: "border 0.2s ease, box-shadow 0.2s ease",
@@ -425,16 +434,16 @@ export function ProjectNavigator({ selectedSampleId, onSelectSample }: ProjectNa
                   display: "flex",
                   alignItems: "center",
                   justifyContent: "space-between",
-                  padding: "4px 6px",
-                  gap: "6px",
-                  fontSize: "0.68rem"
+                  padding: "10px 14px",
+                  gap: "10px",
+                  fontSize: "0.78rem"
                 }}
               >
                 <div
                   style={{
                     display: "flex",
                     alignItems: "center",
-                    gap: "4px",
+                    gap: "8px",
                     flex: 1,
                     minWidth: 0
                   }}
@@ -446,13 +455,13 @@ export function ProjectNavigator({ selectedSampleId, onSelectSample }: ProjectNa
                       toggleExpand(sample.id);
                     }}
                     style={{
-                      width: "16px",
-                      height: "16px",
-                      borderRadius: "4px",
+                      width: "20px",
+                      height: "20px",
+                      borderRadius: "6px",
                       border: `1px solid ${theme.button.outline}`,
                       background: theme.surface,
                       color: theme.text,
-                      fontSize: "0.55rem",
+                      fontSize: "0.65rem",
                       display: "flex",
                       alignItems: "center",
                       justifyContent: "center",
@@ -465,7 +474,7 @@ export function ProjectNavigator({ selectedSampleId, onSelectSample }: ProjectNa
                   </button>
                   <strong
                     style={{
-                      fontSize: "0.7rem",
+                      fontSize: "0.8rem",
                       color: theme.text,
                       whiteSpace: "nowrap",
                       overflow: "hidden",
@@ -475,7 +484,7 @@ export function ProjectNavigator({ selectedSampleId, onSelectSample }: ProjectNa
                     {sample.name}
                   </strong>
                 </div>
-                <div style={{ display: "flex", alignItems: "center", gap: "4px" }}>
+                <div style={{ display: "flex", alignItems: "center", gap: "8px" }}>
                   <button
                     type="button"
                     onClick={(event) => {
@@ -483,8 +492,8 @@ export function ProjectNavigator({ selectedSampleId, onSelectSample }: ProjectNa
                       void toggleSamplePlayback(sample);
                     }}
                     style={{
-                      width: "24px",
-                      height: "24px",
+                      width: "28px",
+                      height: "28px",
                       borderRadius: "50%",
                       border: `1px solid ${theme.button.outline}`,
                       background: playingId === sample.id ? theme.button.primary : theme.button.base,
@@ -507,8 +516,8 @@ export function ProjectNavigator({ selectedSampleId, onSelectSample }: ProjectNa
                       handleDeleteSample(sample);
                     }}
                     style={{
-                      width: "22px",
-                      height: "22px",
+                      width: "26px",
+                      height: "26px",
                       borderRadius: "50%",
                       border: `1px solid ${theme.button.outline}`,
                       background: theme.surface,
@@ -531,17 +540,17 @@ export function ProjectNavigator({ selectedSampleId, onSelectSample }: ProjectNa
                 <div
                   style={{
                     borderTop: `1px solid ${theme.border}`,
-                    padding: "8px 10px",
+                    padding: "12px 16px",
                     display: "flex",
                     flexDirection: "column",
-                    gap: "8px"
+                    gap: "12px"
                   }}
                 >
                   <div
                     style={{
                       display: "flex",
                       flexDirection: "column",
-                      gap: "4px"
+                      gap: "8px"
                     }}
                   >
                     <div
@@ -549,8 +558,8 @@ export function ProjectNavigator({ selectedSampleId, onSelectSample }: ProjectNa
                         display: "flex",
                         justifyContent: "space-between",
                         alignItems: "center",
-                        padding: "8px 10px",
-                        borderRadius: "8px",
+                        padding: "12px 16px",
+                        borderRadius: "12px",
                         border: `1px solid ${theme.border}`,
                         background: theme.surface
                       }}
@@ -560,9 +569,9 @@ export function ProjectNavigator({ selectedSampleId, onSelectSample }: ProjectNa
                         event.dataTransfer.setData("application/x-sample", sample.id);
                       }}
                     >
-                      <div style={{ display: "flex", flexDirection: "column", gap: "2px" }}>
-                        <strong style={{ fontSize: "0.75rem", color: theme.text }}>Full sample</strong>
-                        <span style={{ fontSize: "0.65rem", color: theme.textMuted }}>
+                      <div style={{ display: "flex", flexDirection: "column", gap: "4px" }}>
+                        <strong style={{ fontSize: "0.82rem", color: theme.text }}>Full sample</strong>
+                        <span style={{ fontSize: "0.72rem", color: theme.textMuted }}>
                           {sample.length.toFixed(2)}s • {sample.measures.length} measures
                         </span>
                       </div>
@@ -573,14 +582,14 @@ export function ProjectNavigator({ selectedSampleId, onSelectSample }: ProjectNa
                           void toggleSamplePlayback(sample);
                         }}
                         style={{
-                          width: "26px",
-                          height: "26px",
+                          width: "30px",
+                          height: "30px",
                           borderRadius: "50%",
                           border: `1px solid ${theme.button.outline}`,
                           background: playingId === sample.id ? theme.button.primary : theme.button.base,
                           color: playingId === sample.id ? theme.button.primaryText : theme.text,
                           cursor: "pointer",
-                          fontSize: "0.6rem",
+                          fontSize: "0.68rem",
                           boxShadow: playingId === sample.id ? theme.cardGlow : "none"
                         }}
                       >
@@ -593,7 +602,7 @@ export function ProjectNavigator({ selectedSampleId, onSelectSample }: ProjectNa
                     <summary
                       style={{
                         cursor: "pointer",
-                        fontSize: "0.72rem",
+                        fontSize: "0.8rem",
                         color: theme.text,
                         listStyle: "none"
                       }}
@@ -603,11 +612,11 @@ export function ProjectNavigator({ selectedSampleId, onSelectSample }: ProjectNa
                     <ul
                       style={{
                         listStyle: "none",
-                        margin: "6px 0 0",
+                        margin: "10px 0 0",
                         padding: 0,
                         display: "flex",
                         flexDirection: "column",
-                        gap: "6px"
+                        gap: "8px"
                       }}
                     >
                       {sample.stems.map((stem) => (
@@ -617,8 +626,8 @@ export function ProjectNavigator({ selectedSampleId, onSelectSample }: ProjectNa
                             display: "flex",
                             justifyContent: "space-between",
                             alignItems: "center",
-                            padding: "6px 8px",
-                            borderRadius: "8px",
+                            padding: "8px 12px",
+                            borderRadius: "10px",
                             border: `1px solid ${theme.border}`,
                             background: `${stem.color}1a`
                           }}
@@ -634,8 +643,8 @@ export function ProjectNavigator({ selectedSampleId, onSelectSample }: ProjectNa
                           <span style={{ display: "flex", alignItems: "center", gap: "8px", color: theme.text }}>
                             <span
                               style={{
-                                width: "8px",
-                                height: "8px",
+                                width: "10px",
+                                height: "10px",
                                 borderRadius: "50%",
                                 background: stem.color
                               }}
@@ -649,14 +658,14 @@ export function ProjectNavigator({ selectedSampleId, onSelectSample }: ProjectNa
                               void playStem(sample, stem);
                             }}
                             style={{
-                              width: "24px",
-                              height: "24px",
+                              width: "28px",
+                              height: "28px",
                               borderRadius: "50%",
                               border: `1px solid ${theme.button.outline}`,
                               background: playingId === stem.id ? theme.button.primary : theme.button.base,
                               color: playingId === stem.id ? theme.button.primaryText : theme.text,
                               cursor: "pointer",
-                              fontSize: "0.6rem"
+                              fontSize: "0.68rem"
                             }}
                           >
                             {playingId === stem.id ? "■" : "▶"}
@@ -670,7 +679,7 @@ export function ProjectNavigator({ selectedSampleId, onSelectSample }: ProjectNa
                     <summary
                       style={{
                         cursor: "pointer",
-                        fontSize: "0.72rem",
+                        fontSize: "0.8rem",
                         color: theme.text,
                         listStyle: "none"
                       }}
@@ -680,11 +689,11 @@ export function ProjectNavigator({ selectedSampleId, onSelectSample }: ProjectNa
                       <ul
                         style={{
                           listStyle: "none",
-                          margin: "6px 0 0",
+                          margin: "10px 0 0",
                           padding: 0,
                           display: "flex",
                           flexDirection: "column",
-                          gap: "6px"
+                          gap: "10px"
                         }}
                       >
                       {sample.measures.length === 0 && (
@@ -711,12 +720,12 @@ export function ProjectNavigator({ selectedSampleId, onSelectSample }: ProjectNa
                             key={measure.id}
                             style={{
                               border: `1px solid ${theme.border}`,
-                              borderRadius: "8px",
+                              borderRadius: "12px",
                               background: theme.surface,
-                              padding: "8px 10px",
+                              padding: "12px 16px",
                               display: "flex",
                               flexDirection: "column",
-                              gap: "8px"
+                              gap: "12px"
                             }}
                             onContextMenu={(event) =>
                               handleMeasureContextMenu(event, sample.id, measure.id)
@@ -742,21 +751,27 @@ export function ProjectNavigator({ selectedSampleId, onSelectSample }: ProjectNa
                                 onSelectSample(sample.id);
                               }}
                             >
-                              <div style={{ display: "flex", flexDirection: "column", gap: "4px" }}>
-                        <strong style={{ fontSize: "0.72rem", color: theme.text }}>
+                              <div
+                                style={{
+                                  display: "flex",
+                                  flexDirection: "column",
+                                  gap: "6px"
+                                }}
+                              >
+                        <strong style={{ fontSize: "0.82rem", color: theme.text }}>
                                   Measure {index + 1}
                                 </strong>
-                                <span style={{ fontSize: "0.72rem", color: theme.textMuted }}>
+                                <span style={{ fontSize: "0.78rem", color: theme.textMuted }}>
                                   {measure.start.toFixed(2)}s → {measure.end.toFixed(2)}s ·
                                   {duration.toFixed(2)}s · {measure.beatCount} beats
                                 </span>
-                                <span style={{ fontSize: "0.72rem", color: theme.button.primary }}>
+                                <span style={{ fontSize: "0.78rem", color: theme.button.primary }}>
                                   {measure.detectedPitch ?? "?"} → {tunedPitch}
                                   {hasRetune ? " (re-keyed)" : ""}
                                 </span>
                               </div>
-                              <div style={{ display: "flex", alignItems: "center", gap: "6px" }}>
-                                <span style={{ fontSize: "0.7rem", color: theme.textMuted }}>
+                              <div style={{ display: "flex", alignItems: "center", gap: "10px" }}>
+                                <span style={{ fontSize: "0.78rem", color: theme.textMuted }}>
                                   Energy {Math.round((measure.energy ?? 0) * 100)}%
                                 </span>
                                 <button
@@ -766,8 +781,8 @@ export function ProjectNavigator({ selectedSampleId, onSelectSample }: ProjectNa
                                     void playMeasure(sample, measure);
                                   }}
                                   style={{
-                                    width: "30px",
-                                    height: "30px",
+                                    width: "36px",
+                                    height: "36px",
                                     borderRadius: "50%",
                                     border: `1px solid ${theme.button.outline}`,
                                     background: playingId === measure.id
@@ -776,7 +791,8 @@ export function ProjectNavigator({ selectedSampleId, onSelectSample }: ProjectNa
                                     color: playingId === measure.id
                                       ? theme.button.primaryText
                                       : theme.text,
-                                    cursor: "pointer"
+                                    cursor: "pointer",
+                                    fontSize: "0.85rem"
                                   }}
                                 >
                                   {playingId === measure.id ? "■" : "▶"}
@@ -788,7 +804,7 @@ export function ProjectNavigator({ selectedSampleId, onSelectSample }: ProjectNa
                               <summary
                                 style={{
                                   cursor: "pointer",
-                                  fontSize: "0.78rem",
+                                  fontSize: "0.82rem",
                                   color: theme.text,
                                   listStyle: "none"
                                 }}
@@ -798,11 +814,11 @@ export function ProjectNavigator({ selectedSampleId, onSelectSample }: ProjectNa
                               <ul
                                 style={{
                                   listStyle: "none",
-                                  margin: "10px 0 0",
+                                  margin: "12px 0 0",
                                   padding: 0,
                                   display: "flex",
                                   flexDirection: "column",
-                                  gap: "6px"
+                                  gap: "8px"
                                 }}
                               >
                                 {measureStems.map((stem) => (
@@ -812,8 +828,8 @@ export function ProjectNavigator({ selectedSampleId, onSelectSample }: ProjectNa
                                       display: "flex",
                                       justifyContent: "space-between",
                                       alignItems: "center",
-                                      padding: "6px 8px",
-                                      borderRadius: "8px",
+                                      padding: "8px 12px",
+                                      borderRadius: "10px",
                                       border: `1px solid ${theme.border}`,
                                       background: `${stem.color}1f`
                                     }}
@@ -843,13 +859,13 @@ export function ProjectNavigator({ selectedSampleId, onSelectSample }: ProjectNa
                                         style={{
                                           display: "flex",
                                           alignItems: "center",
-                                          gap: "6px"
+                                          gap: "8px"
                                         }}
                                       >
                                         <span
                                           style={{
-                                            width: "8px",
-                                            height: "8px",
+                                            width: "10px",
+                                            height: "10px",
                                             borderRadius: "50%",
                                             background: stem.color
                                           }}
@@ -857,7 +873,7 @@ export function ProjectNavigator({ selectedSampleId, onSelectSample }: ProjectNa
                                         {stem.name}
                                       </span>
                                       {(stem.extractionModel || stem.processingNotes) && (
-                                        <span style={{ fontSize: "0.6rem", color: theme.textMuted }}>
+                                        <span style={{ fontSize: "0.68rem", color: theme.textMuted }}>
                                           {stem.extractionModel}
                                           {stem.processingNotes
                                             ? stem.extractionModel
@@ -874,8 +890,8 @@ export function ProjectNavigator({ selectedSampleId, onSelectSample }: ProjectNa
                                         void playStem(sample, stem);
                                       }}
                                       style={{
-                                        width: "24px",
-                                        height: "24px",
+                                        width: "28px",
+                                        height: "28px",
                                         borderRadius: "50%",
                                         border: `1px solid ${theme.button.outline}`,
                                         background: playingId === stem.id
@@ -909,8 +925,8 @@ export function ProjectNavigator({ selectedSampleId, onSelectSample }: ProjectNa
                                   style={{
                                     display: "flex",
                                     flexWrap: "wrap",
-                                    gap: "4px",
-                                    padding: "2px 0"
+                                    gap: "8px",
+                                    padding: "6px 0"
                                   }}
                                 >
                                   {measure.beats.map((beat) => {
@@ -929,13 +945,13 @@ export function ProjectNavigator({ selectedSampleId, onSelectSample }: ProjectNa
                                         style={{
                                           borderRadius: "999px",
                                           border: `1px solid ${isActive ? theme.button.primary : theme.border}`,
-                                          background: isActive ? `${theme.button.primary}1f` : theme.surfaceOverlay,
+                                          background: isActive ? `${theme.button.primary}24` : theme.surfaceOverlay,
                                           color: theme.text,
-                                          fontSize: "0.66rem",
-                                          padding: "4px 8px",
+                                          fontSize: "0.72rem",
+                                          padding: "6px 12px",
                                           display: "flex",
                                           alignItems: "center",
-                                          gap: "6px",
+                                          gap: "8px",
                                           cursor: "pointer",
                                           boxShadow: isActive ? theme.cardGlow : "none"
                                         }}
@@ -953,7 +969,7 @@ export function ProjectNavigator({ selectedSampleId, onSelectSample }: ProjectNa
                                         }}
                                       >
                                         <span style={{ fontWeight: 600 }}>B{beat.index + 1}</span>
-                                        <span style={{ color: theme.textMuted }}>
+                                        <span style={{ color: theme.textMuted, fontSize: "0.7rem" }}>
                                           {(beat.end - beat.start).toFixed(2)}s
                                         </span>
                                         <span style={{ color: theme.button.primary }}>
@@ -969,16 +985,16 @@ export function ProjectNavigator({ selectedSampleId, onSelectSample }: ProjectNa
                                         position: "absolute",
                                         top: 0,
                                         left: "100%",
-                                        marginLeft: "12px",
-                                        padding: "10px 12px",
+                                        marginLeft: "16px",
+                                        padding: "14px 16px",
                                         background: theme.surfaceOverlay,
                                         border: `1px solid ${theme.button.outline}`,
-                                        borderRadius: "10px",
+                                        borderRadius: "14px",
                                         boxShadow: theme.shadow,
                                         display: "flex",
                                         flexDirection: "column",
-                                        gap: "8px",
-                                        minWidth: "220px",
+                                        gap: "10px",
+                                        minWidth: "240px",
                                         zIndex: 10
                                       }}
                                       onMouseEnter={() => {
@@ -1002,11 +1018,11 @@ export function ProjectNavigator({ selectedSampleId, onSelectSample }: ProjectNa
                                           gap: "8px"
                                         }}
                                       >
-                                        <div style={{ display: "flex", flexDirection: "column", gap: "2px" }}>
-                                          <strong style={{ fontSize: "0.72rem", color: theme.text }}>
+                                        <div style={{ display: "flex", flexDirection: "column", gap: "4px" }}>
+                                          <strong style={{ fontSize: "0.8rem", color: theme.text }}>
                                             Beat {hoveredBeatInMeasure.beat.index + 1}
                                           </strong>
-                                          <span style={{ fontSize: "0.66rem", color: theme.textMuted }}>
+                                          <span style={{ fontSize: "0.72rem", color: theme.textMuted }}>
                                             {hoveredBeatInMeasure.beat.start.toFixed(2)}s →
                                             {hoveredBeatInMeasure.beat.end.toFixed(2)}s ·
                                             {(hoveredBeatInMeasure.beat.end - hoveredBeatInMeasure.beat.start).toFixed(2)}s
@@ -1019,8 +1035,8 @@ export function ProjectNavigator({ selectedSampleId, onSelectSample }: ProjectNa
                                             void playBeat(sample, hoveredBeatInMeasure.beat);
                                           }}
                                           style={{
-                                            width: "26px",
-                                            height: "26px",
+                                            width: "30px",
+                                            height: "30px",
                                             borderRadius: "50%",
                                             border: `1px solid ${theme.button.outline}`,
                                             background: playingId === hoveredBeatInMeasure.beat.id
@@ -1042,7 +1058,7 @@ export function ProjectNavigator({ selectedSampleId, onSelectSample }: ProjectNa
                                           padding: 0,
                                           display: "flex",
                                           flexDirection: "column",
-                                          gap: "6px"
+                                          gap: "8px"
                                         }}
                                       >
                                         {hoveredBeatInMeasure.beat.stems.map((stem) => (
@@ -1052,8 +1068,8 @@ export function ProjectNavigator({ selectedSampleId, onSelectSample }: ProjectNa
                                               display: "flex",
                                               justifyContent: "space-between",
                                               alignItems: "center",
-                                              padding: "6px 8px",
-                                              borderRadius: "8px",
+                                              padding: "8px 12px",
+                                              borderRadius: "10px",
                                               border: `1px solid ${theme.border}`,
                                               background: `${stem.color}24`
                                             }}
@@ -1083,13 +1099,13 @@ export function ProjectNavigator({ selectedSampleId, onSelectSample }: ProjectNa
                                                 style={{
                                                   display: "flex",
                                                   alignItems: "center",
-                                                  gap: "6px"
+                                                  gap: "8px"
                                                 }}
                                               >
                                                 <span
                                                   style={{
-                                                    width: "8px",
-                                                    height: "8px",
+                                                    width: "10px",
+                                                    height: "10px",
                                                     borderRadius: "50%",
                                                     background: stem.color
                                                   }}
@@ -1097,7 +1113,7 @@ export function ProjectNavigator({ selectedSampleId, onSelectSample }: ProjectNa
                                                 {stem.name}
                                               </span>
                                               {(stem.extractionModel || stem.processingNotes) && (
-                                                <span style={{ fontSize: "0.6rem", color: theme.textMuted }}>
+                                                <span style={{ fontSize: "0.68rem", color: theme.textMuted }}>
                                                   {stem.extractionModel}
                                                   {stem.processingNotes
                                                     ? stem.extractionModel
@@ -1114,8 +1130,8 @@ export function ProjectNavigator({ selectedSampleId, onSelectSample }: ProjectNa
                                                 void playStem(sample, stem);
                                               }}
                                               style={{
-                                                width: "24px",
-                                                height: "24px",
+                                                width: "28px",
+                                                height: "28px",
                                                 borderRadius: "50%",
                                                 border: `1px solid ${theme.button.outline}`,
                                                 background: playingId === stem.id
