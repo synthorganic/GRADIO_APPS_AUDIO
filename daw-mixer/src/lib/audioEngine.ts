@@ -431,16 +431,18 @@ export class AudioEngine {
 
     switch (type) {
       case "vocals": {
-        const highPass = createFilter("highpass", 140, 0.7);
-        const presence = createFilter("peaking", 3200, 1.4, 6);
-        const air = createFilter("lowpass", 7800, 0.9);
-        return [highPass, presence, air];
+        const highPass = createFilter("highpass", 170, 0.85);
+        const presence = createFilter("peaking", 3200, 1.2, 4.5);
+        const deEss = createFilter("peaking", 7800, 3.2, -6);
+        const airTrim = createFilter("lowpass", 13500, 0.7);
+        return [highPass, presence, deEss, airTrim];
       }
       case "leads": {
-        const body = createFilter("highpass", 260, 0.9);
-        const focus = createFilter("peaking", 1800, 1.1, 7);
-        const shimmer = createFilter("lowpass", 5200, 0.85);
-        return [body, focus, shimmer];
+        const body = createFilter("highpass", 340, 0.95);
+        const focus = createFilter("peaking", 2100, 1.05, 6.5);
+        const sheen = createFilter("peaking", 5200, 1.1, 3);
+        const air = createFilter("lowpass", 9000, 0.8);
+        return [body, focus, sheen, air];
       }
       case "percussion": {
         const snap = createFilter("highpass", 2000, 0.7);
@@ -448,9 +450,10 @@ export class AudioEngine {
         return [snap, sparkle];
       }
       case "kicks": {
-        const thump = createFilter("lowshelf", 110, 0.7, 8);
-        const tighten = createFilter("lowpass", 220, 0.9);
-        return [thump, tighten];
+        const subTrim = createFilter("highpass", 45, 0.8);
+        const punch = createFilter("peaking", 120, 1.05, 5.5);
+        const tighten = createFilter("lowpass", 260, 0.85);
+        return [subTrim, punch, tighten];
       }
       case "bass": {
         const lowCut = createFilter("highpass", 35, 0.8);
