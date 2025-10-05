@@ -37,9 +37,6 @@ interface MeasureContextMenuState extends ContextMenuState {
   measureId: string;
 }
 
-const NAV_ITEM_HEIGHT = 44;
-const MAX_VISIBLE_ITEMS = 8;
-
 type HoverCardPayload =
   | { type: "sample"; sample: SampleClip; rect: DOMRect }
   | { type: "stem"; sample: SampleClip; stem: StemInfo; rect: DOMRect; measure?: Measure }
@@ -454,201 +451,163 @@ export function ProjectNavigator({ selectedSampleId, onSelectSample }: ProjectNa
 
       <div
         style={{
-          display: "flex",
-          flexDirection: "column",
-          gap: "10px",
-          padding: 0,
-          margin: 0,
-          overflowY: "auto"
+          flex: 1,
+          overflowY: "auto",
+          padding: "0 4px 8px 0"
         }}
       >
-        {groupedSamples.map((sample) => {
-          const expanded = expandedSamples[sample.id] ?? false;
-          const isSelected = selectedSampleId === sample.id;
-          const isSampleHovered = hoverCard?.type === "sample" && hoverCard.sample.id === sample.id;
-          const highlightSample = isSelected || isSampleHovered;
-          return (
-            <div
-              key={sample.id}
-              style={{
-                background: highlightSample ? theme.surfaceRaised : theme.surfaceOverlay,
-                borderRadius: "12px",
-                border: `1px solid ${highlightSample ? theme.button.primary : theme.border}`,
-                boxShadow: highlightSample ? theme.cardGlow : "none",
-                transition: "border 0.2s ease, box-shadow 0.2s ease",
-                overflow: "visible",
-                position: "relative"
-              }}
-              onContextMenu={(event) => onSampleContextMenu(event, sample.id)}
-              onClick={() => onSelectSample(sample.id)}
-            >
-              <div
+        <ul
+          style={{
+            listStyle: "none",
+            margin: 0,
+            padding: 0,
+            display: "flex",
+            flexDirection: "column",
+            gap: "4px"
+          }}
+        >
+          {groupedSamples.map((sample) => {
+            const expanded = expandedSamples[sample.id] ?? false;
+            const isSelected = selectedSampleId === sample.id;
+            const isSampleHovered =
+              hoverCard?.type === "sample" && hoverCard.sample.id === sample.id;
+            const highlightSample = isSelected || isSampleHovered;
+            const clipLength = sample.duration ?? sample.length;
+            const metaParts = [
+              sample.variantLabel ?? null,
+              sample.bpm ? `${sample.bpm} BPM` : null,
+              sample.key ?? null,
+              sample.measures.length ? `${sample.measures.length} measures` : null
+            ].filter(Boolean) as string[];
+            const metaLine = metaParts.join(" • ");
+            return (
+              <li
+                key={sample.id}
                 style={{
                   display: "flex",
-                  alignItems: "center",
-                  justifyContent: "space-between",
-                  padding: "0 14px",
-                  minHeight: `${NAV_ITEM_HEIGHT}px`,
-                  gap: "10px",
-                  fontSize: "0.78rem"
+                  flexDirection: "column",
+                  gap: "4px"
                 }}
-                onMouseEnter={(event) => {
-                  showHoverCard(event.currentTarget, { type: "sample", sample });
-                }}
-                onMouseLeave={() =>
-                  clearHoverCard((info) => info.type === "sample" && info.sample.id === sample.id)
-                }
               >
                 <div
+                  role="button"
+                  tabIndex={0}
                   style={{
-                    display: "flex",
+                    display: "grid",
+                    gridTemplateColumns: "14px minmax(0, 1fr) auto auto auto",
                     alignItems: "center",
-                    gap: "8px",
-                    flex: 1,
-                    minWidth: 0
+                    gap: "6px",
+                    padding: "2px 6px",
+                    borderRadius: "6px",
+                    border: highlightSample
+                      ? `1px solid ${theme.button.primary}`
+                      : "1px solid transparent",
+                    background: highlightSample
+                      ? `${theme.button.primary}14`
+                      : "transparent",
+                    color: theme.text,
+                    cursor: "pointer",
+                    fontSize: "0.72rem",
+                    lineHeight: 1.4,
+                    outline: "none"
+                  }}
+                  onContextMenu={(event) => onSampleContextMenu(event, sample.id)}
+                  onClick={() => onSelectSample(sample.id)}
+                  onMouseEnter={(event) => {
+                    showHoverCard(event.currentTarget, { type: "sample", sample });
+                  }}
+                  onMouseLeave={() =>
+                    clearHoverCard(
+                      (info) => info.type === "sample" && info.sample.id === sample.id
+                    )
+                  }
+                  onKeyDown={(event) => {
+                    if (event.key === "Enter" || event.key === " ") {
+                      event.preventDefault();
+                      onSelectSample(sample.id);
+                    }
+                    if (event.key === "ArrowRight" && !expanded) {
+                      event.preventDefault();
+                      toggleExpand(sample.id);
+                    }
+                    if (event.key === "ArrowLeft" && expanded) {
+                      event.preventDefault();
+                      toggleExpand(sample.id);
+                    }
                   }}
                 >
                   <button
                     type="button"
+                    aria-label={expanded ? "Collapse sample" : "Expand sample"}
                     onClick={(event) => {
                       event.stopPropagation();
                       toggleExpand(sample.id);
                     }}
                     style={{
-                      width: "22px",
-                      height: "22px",
-                      borderRadius: "6px",
-                      border: `1px solid ${theme.button.outline}`,
-                      background: theme.surface,
-                      color: theme.text,
-                      fontSize: "0.65rem",
-                      display: "flex",
-                      alignItems: "center",
-                      justifyContent: "center",
+                      all: "unset",
                       cursor: "pointer",
-                      padding: 0
+                      color: theme.textMuted,
+                      fontSize: "0.7rem",
+                      textAlign: "center"
                     }}
-                    aria-label={expanded ? "Collapse sample" : "Expand sample"}
                   >
                     {expanded ? "▾" : "▸"}
                   </button>
-                  <strong
+                  <div
                     style={{
-                      fontSize: "0.8rem",
-                      color: theme.text,
-                      whiteSpace: "nowrap",
-                      overflow: "hidden",
-                      textOverflow: "ellipsis"
+                      display: "flex",
+                      flexDirection: "column",
+                      minWidth: 0,
+                      gap: "2px"
                     }}
                   >
-                    {sample.name}
-                  </strong>
-                  {sample.variantLabel && (
                     <span
                       style={{
-                        fontSize: "0.68rem",
-                        color: theme.button.primary,
-                        background: `${theme.button.primary}20`,
-                        borderRadius: "999px",
-                        padding: "2px 8px"
+                        fontWeight: highlightSample ? 600 : 500,
+                        whiteSpace: "nowrap",
+                        overflow: "hidden",
+                        textOverflow: "ellipsis"
                       }}
                     >
-                      {sample.variantLabel}
+                      {sample.name}
                     </span>
-                  )}
-                </div>
-                <div style={{ display: "flex", alignItems: "center", gap: "8px" }}>
-                  <button
-                    type="button"
-                    onClick={(event) => {
-                      event.stopPropagation();
-                      void toggleSamplePlayback(sample);
-                    }}
+                    <span
+                      style={{
+                        color: theme.textMuted,
+                        fontSize: "0.62rem",
+                        whiteSpace: "nowrap",
+                        overflow: "hidden",
+                        textOverflow: "ellipsis"
+                      }}
+                    >
+                      {metaLine || formatSeconds(clipLength)}
+                    </span>
+                  </div>
+                  <span
                     style={{
-                      width: "28px",
-                      height: "28px",
-                      borderRadius: "50%",
-                      border: `1px solid ${theme.button.outline}`,
-                      background: playingId === sample.id ? theme.button.primary : theme.button.base,
-                      color: playingId === sample.id ? theme.button.primaryText : theme.text,
-                      cursor: "pointer",
-                      display: "flex",
-                      alignItems: "center",
-                      justifyContent: "center",
-                      padding: 0,
-                      boxShadow: playingId === sample.id ? theme.cardGlow : "none"
-                    }}
-                    aria-label={playingId === sample.id ? "Stop sample preview" : "Play sample preview"}
-                  >
-                    {playingId === sample.id ? "■" : "▶"}
-                  </button>
-                  <button
-                    type="button"
-                    onClick={(event) => {
-                      event.stopPropagation();
-                      handleDeleteSample(sample);
-                    }}
-                    style={{
-                      width: "26px",
-                      height: "26px",
-                      borderRadius: "50%",
-                      border: `1px solid ${theme.button.outline}`,
-                      background: theme.surface,
                       color: theme.textMuted,
-                      cursor: "pointer",
-                      display: "flex",
-                      alignItems: "center",
-                      justifyContent: "center",
-                      padding: 0
+                      fontSize: "0.62rem",
+                      whiteSpace: "nowrap"
                     }}
-                    aria-label="Delete sample"
-                    title="Delete sample"
                   >
-                    ✕
-                  </button>
-                </div>
-              </div>
-
-              {expanded && (
-                <div
-                  style={{
-                    borderTop: `1px solid ${theme.border}`,
-                    padding: "10px 12px 12px",
-                    display: "flex",
-                    flexDirection: "column",
-                    gap: "12px"
-                  }}
-                >
+                    {formatSeconds(clipLength)}
+                  </span>
+                  <span
+                    style={{
+                      color: theme.textMuted,
+                      fontSize: "0.62rem",
+                      whiteSpace: "nowrap"
+                    }}
+                  >
+                    {sample.stems.length} stems
+                  </span>
                   <div
                     style={{
                       display: "flex",
                       alignItems: "center",
-                      justifyContent: "space-between",
-                      minHeight: `${NAV_ITEM_HEIGHT}px`,
-                      padding: "0 12px",
-                      borderRadius: "10px",
-                      border: `1px solid ${theme.border}`,
-                      background: theme.surface
+                      gap: "4px"
                     }}
-                    draggable
-                    onDragStart={(event) => {
-                      event.dataTransfer.effectAllowed = "copy";
-                      event.dataTransfer.setData("application/x-sample", sample.id);
-                    }}
-                    onMouseEnter={(event) => showHoverCard(event.currentTarget, { type: "sample", sample })}
-                    onMouseLeave={() =>
-                      clearHoverCard((info) => info.type === "sample" && info.sample.id === sample.id)
-                    }
                   >
-                    <div style={{ display: "flex", alignItems: "center", gap: "8px", minWidth: 0 }}>
-                      <strong style={{ fontSize: "0.8rem", color: theme.text }}>Full sample</strong>
-                      <span style={{ fontSize: "0.72rem", color: theme.textMuted }}>
-                        {sample.measures.length} measures
-                      </span>
-                      {sample.isFragment && (
-                        <span style={{ fontSize: "0.68rem", color: theme.textMuted }}>(Fragment)</span>
-                      )}
-                    </div>
                     <button
                       type="button"
                       onClick={(event) => {
@@ -656,76 +615,83 @@ export function ProjectNavigator({ selectedSampleId, onSelectSample }: ProjectNa
                         void toggleSamplePlayback(sample);
                       }}
                       style={{
-                        width: "28px",
-                        height: "28px",
-                        borderRadius: "50%",
-                        border: `1px solid ${theme.button.outline}`,
-                        background: playingId === sample.id ? theme.button.primary : theme.button.base,
-                        color: playingId === sample.id ? theme.button.primaryText : theme.text,
+                        all: "unset",
                         cursor: "pointer",
-                        boxShadow: playingId === sample.id ? theme.cardGlow : "none"
+                        padding: "2px 6px",
+                        borderRadius: "999px",
+                        border: `1px solid ${theme.button.outline}`,
+                        background:
+                          playingId === sample.id ? theme.button.primary : "transparent",
+                        color:
+                          playingId === sample.id
+                            ? theme.button.primaryText
+                            : theme.text,
+                        fontSize: "0.62rem",
+                        textTransform: "uppercase"
                       }}
                     >
-                      {playingId === sample.id ? "■" : "▶"}
+                      {playingId === sample.id ? "Stop" : "Play"}
+                    </button>
+                    <button
+                      type="button"
+                      onClick={(event) => {
+                        event.stopPropagation();
+                        handleDeleteSample(sample);
+                      }}
+                      style={{
+                        all: "unset",
+                        cursor: "pointer",
+                        color: theme.textMuted,
+                        fontSize: "0.7rem",
+                        padding: "0 4px"
+                      }}
+                      title="Delete sample"
+                      aria-label="Delete sample"
+                    >
+                      ✕
                     </button>
                   </div>
-
-                  <details
-                    open
+                </div>
+                {expanded && (
+                  <div
                     style={{
-                      borderRadius: "12px",
-                      border: `1px solid ${theme.border}`,
-                      background: theme.surface,
-                      overflow: "hidden"
+                      display: "flex",
+                      flexDirection: "column",
+                      gap: "6px",
+                      marginLeft: "18px",
+                      fontSize: "0.68rem"
                     }}
                   >
-                    <summary
+                    <section
                       style={{
-                        cursor: "pointer",
-                        fontSize: "0.8rem",
-                        color: theme.text,
-                        listStyle: "none",
                         display: "flex",
-                        alignItems: "center",
-                        justifyContent: "space-between",
-                        padding: "0 12px",
-                        minHeight: `${NAV_ITEM_HEIGHT}px`
+                        flexDirection: "column",
+                        gap: "4px"
                       }}
                     >
-                      <span>Full stems</span>
-                      <span style={{ fontSize: "0.7rem", color: theme.textMuted }}>
-                        {sample.stems.length}
-                      </span>
-                    </summary>
-                    <div
-                      style={{
-                        maxHeight: `${NAV_ITEM_HEIGHT * MAX_VISIBLE_ITEMS}px`,
-                        overflowY: "auto",
-                        padding: "6px 0"
-                      }}
-                    >
+                      <header
+                        style={{
+                          textTransform: "uppercase",
+                          fontSize: "0.6rem",
+                          letterSpacing: "0.08em",
+                          color: theme.textMuted
+                        }}
+                      >
+                        Stems ({sample.stems.length})
+                      </header>
                       {sample.stems.length === 0 ? (
-                        <div
-                          style={{
-                            display: "flex",
-                            alignItems: "center",
-                            minHeight: `${NAV_ITEM_HEIGHT}px`,
-                            padding: "0 12px",
-                            fontSize: "0.75rem",
-                            color: theme.textMuted
-                          }}
-                        >
+                        <span style={{ color: theme.textMuted }}>
                           Stems will appear after separation
-                        </div>
+                        </span>
                       ) : (
                         <ul
                           style={{
-                            listStyle: "none",
-                            margin: 0,
+                            listStyle: "disc",
+                            margin: "0 0 0 16px",
                             padding: 0,
                             display: "flex",
                             flexDirection: "column",
-                            gap: "6px"
+                            gap: "2px"
                           }}
                         >
                           {sample.stems.map((stem) => {
@@ -737,17 +703,10 @@ export function ProjectNavigator({ selectedSampleId, onSelectSample }: ProjectNa
                               <li
                                 key={stem.id}
                                 style={{
-                                  display: "flex",
+                                  display: "grid",
+                                  gridTemplateColumns: "minmax(0, 1fr) auto",
                                   alignItems: "center",
-                                  justifyContent: "space-between",
-                                  height: `${NAV_ITEM_HEIGHT}px`,
-                                  padding: "0 12px",
-                                  borderRadius: "10px",
-                                  border: `1px solid ${
-                                    isHoveringStem ? theme.button.primary : theme.border
-                                  }`,
-                                  background: `${stem.color}1a`,
-                                  boxShadow: isHoveringStem ? theme.cardGlow : "none"
+                                  gap: "6px"
                                 }}
                                 draggable
                                 onDragStart={(event) => {
@@ -773,15 +732,16 @@ export function ProjectNavigator({ selectedSampleId, onSelectSample }: ProjectNa
                                   style={{
                                     display: "flex",
                                     alignItems: "center",
-                                    gap: "8px",
-                                    color: theme.text,
-                                    minWidth: 0
+                                    gap: "6px",
+                                    minWidth: 0,
+                                    fontWeight: isHoveringStem ? 600 : 400,
+                                    color: theme.text
                                   }}
                                 >
                                   <span
                                     style={{
-                                      width: "10px",
-                                      height: "10px",
+                                      width: "6px",
+                                      height: "6px",
                                       borderRadius: "50%",
                                       background: stem.color
                                     }}
@@ -803,84 +763,60 @@ export function ProjectNavigator({ selectedSampleId, onSelectSample }: ProjectNa
                                     void playStem(sample, stem);
                                   }}
                                   style={{
-                                    width: "26px",
-                                    height: "26px",
-                                    borderRadius: "50%",
+                                    all: "unset",
+                                    cursor: "pointer",
+                                    padding: "2px 6px",
+                                    borderRadius: "999px",
                                     border: `1px solid ${theme.button.outline}`,
                                     background:
-                                      playingId === stem.id ? theme.button.primary : theme.button.base,
+                                      playingId === stem.id
+                                        ? theme.button.primary
+                                        : "transparent",
                                     color:
-                                      playingId === stem.id ? theme.button.primaryText : theme.text,
-                                    cursor: "pointer",
-                                    fontSize: "0.68rem"
+                                      playingId === stem.id
+                                        ? theme.button.primaryText
+                                        : theme.text,
+                                    fontSize: "0.6rem",
+                                    textTransform: "uppercase"
                                   }}
                                 >
-                                  {playingId === stem.id ? "■" : "▶"}
+                                  {playingId === stem.id ? "Stop" : "Play"}
                                 </button>
                               </li>
                             );
                           })}
                         </ul>
                       )}
-                    </div>
-                  </details>
-
-                  <details
-                    open
-                    style={{
-                      borderRadius: "12px",
-                      border: `1px solid ${theme.border}`,
-                      background: theme.surface,
-                      overflow: "hidden"
-                    }}
-                  >
-                    <summary
+                    </section>
+                    <section
                       style={{
-                        cursor: "pointer",
-                        fontSize: "0.8rem",
-                        color: theme.text,
-                        listStyle: "none",
                         display: "flex",
-                        alignItems: "center",
-                        justifyContent: "space-between",
-                        padding: "0 12px",
-                        minHeight: `${NAV_ITEM_HEIGHT}px`
+                        flexDirection: "column",
+                        gap: "4px"
                       }}
                     >
-                      <span>Measures</span>
-                      <span style={{ fontSize: "0.7rem", color: theme.textMuted }}>
-                        {sample.measures.length}
-                      </span>
-                    </summary>
-                    <div
-                      style={{
-                        maxHeight: `${NAV_ITEM_HEIGHT * MAX_VISIBLE_ITEMS}px`,
-                        overflowY: "auto",
-                        padding: "6px 0"
-                      }}
-                    >
+                      <header
+                        style={{
+                          textTransform: "uppercase",
+                          fontSize: "0.6rem",
+                          letterSpacing: "0.08em",
+                          color: theme.textMuted
+                        }}
+                      >
+                        Measures ({sample.measures.length})
+                      </header>
                       {sample.measures.length === 0 ? (
-                        <div
-                          style={{
-                            display: "flex",
-                            alignItems: "center",
-                            minHeight: `${NAV_ITEM_HEIGHT}px`,
-                            padding: "0 12px",
-                            fontSize: "0.75rem",
-                            color: theme.textMuted
-                          }}
-                        >
+                        <span style={{ color: theme.textMuted }}>
                           Waiting for measure detection…
-                        </div>
+                        </span>
                       ) : (
-                        <ul
+                        <ol
                           style={{
-                            listStyle: "none",
-                            margin: 0,
+                            margin: "0 0 0 16px",
                             padding: 0,
                             display: "flex",
                             flexDirection: "column",
-                            gap: "8px"
+                            gap: "4px"
                           }}
                         >
                           {sample.measures.map((measure, index) => {
@@ -899,13 +835,10 @@ export function ProjectNavigator({ selectedSampleId, onSelectSample }: ProjectNa
                               <li
                                 key={measure.id}
                                 style={{
-                                  border: `1px solid ${theme.border}`,
-                                  borderRadius: "12px",
-                                  background: theme.surface,
-                                  padding: "8px 10px",
                                   display: "flex",
                                   flexDirection: "column",
-                                  gap: "6px"
+                                  gap: "2px",
+                                  paddingBottom: "2px"
                                 }}
                                 onContextMenu={(event) =>
                                   handleMeasureContextMenu(event, sample.id, measure.id)
@@ -913,23 +846,22 @@ export function ProjectNavigator({ selectedSampleId, onSelectSample }: ProjectNa
                               >
                                 <div
                                   style={{
-                                    display: "flex",
+                                    display: "grid",
+                                    gridTemplateColumns: "minmax(0, 1fr) auto",
                                     alignItems: "center",
-                                    justifyContent: "space-between",
-                                    minHeight: `${NAV_ITEM_HEIGHT}px`,
-                                    padding: "0 2px"
+                                    gap: "8px",
+                                    cursor: "grab"
                                   }}
                                   draggable
                                   onDragStart={(event) => {
                                     event.dataTransfer.effectAllowed = "copy";
                                     event.dataTransfer.setData(
                                       "application/x-measure",
-                                      JSON.stringify({ sampleId: sample.id, measureId: measure.id })
+                                      JSON.stringify({
+                                        sampleId: sample.id,
+                                        measureId: measure.id
+                                      })
                                     );
-                                  }}
-                                  onClick={(event) => {
-                                    event.stopPropagation();
-                                    onSelectSample(sample.id);
                                   }}
                                   onMouseEnter={(event) =>
                                     showHoverCard(event.currentTarget, {
@@ -951,58 +883,57 @@ export function ProjectNavigator({ selectedSampleId, onSelectSample }: ProjectNa
                                     style={{
                                       display: "flex",
                                       alignItems: "center",
-                                      gap: "8px",
+                                      gap: "6px",
                                       minWidth: 0
                                     }}
                                   >
-                                    <strong style={{ fontSize: "0.78rem", color: theme.text }}>
-                                      Measure {index + 1}
-                                    </strong>
+                                    <span style={{ fontWeight: 600 }}>M{index + 1}</span>
                                     <span
                                       style={{
-                                        fontSize: "0.7rem",
                                         color: theme.textMuted,
+                                        fontSize: "0.62rem",
                                         whiteSpace: "nowrap"
                                       }}
                                     >
-                                      {measure.beatCount} beats
+                                      {`${formatSeconds(measure.end - measure.start)} • start ${measure.start.toFixed(2)}s`}
                                     </span>
                                   </div>
-                                  <div style={{ display: "flex", alignItems: "center", gap: "8px" }}>
-                                    <button
-                                      type="button"
-                                      onClick={(event) => {
-                                        event.stopPropagation();
-                                        void playMeasure(sample, measure);
-                                      }}
-                                      style={{
-                                        width: "28px",
-                                        height: "28px",
-                                        borderRadius: "50%",
-                                        border: `1px solid ${theme.button.outline}`,
-                                        background:
-                                          playingId === measure.id
-                                            ? theme.button.primary
-                                            : theme.button.base,
-                                        color:
-                                          playingId === measure.id
-                                            ? theme.button.primaryText
-                                            : theme.text,
-                                        cursor: "pointer",
-                                        fontSize: "0.75rem"
-                                      }}
-                                    >
-                                      {playingId === measure.id ? "■" : "▶"}
-                                    </button>
-                                  </div>
+                                  <button
+                                    type="button"
+                                    onClick={(event) => {
+                                      event.stopPropagation();
+                                      void playMeasure(sample, measure);
+                                    }}
+                                    style={{
+                                      all: "unset",
+                                      cursor: "pointer",
+                                      padding: "2px 6px",
+                                      borderRadius: "999px",
+                                      border: `1px solid ${theme.button.outline}`,
+                                      background:
+                                        playingId === measure.id
+                                          ? theme.button.primary
+                                          : "transparent",
+                                      color:
+                                        playingId === measure.id
+                                          ? theme.button.primaryText
+                                          : theme.text,
+                                      fontSize: "0.6rem",
+                                      textTransform: "uppercase"
+                                    }}
+                                  >
+                                    {playingId === measure.id ? "Stop" : "Play"}
+                                  </button>
                                 </div>
                                 {measureStems.length > 0 && (
-                                  <div
+                                  <ul
                                     style={{
+                                      listStyle: "circle",
+                                      margin: "0 0 0 16px",
+                                      padding: 0,
                                       display: "flex",
-                                      gap: "6px",
-                                      overflowX: "auto",
-                                      padding: "0 2px 0 2px"
+                                      flexDirection: "column",
+                                      gap: "2px"
                                     }}
                                   >
                                     {measureStems.map((stem) => {
@@ -1011,21 +942,13 @@ export function ProjectNavigator({ selectedSampleId, onSelectSample }: ProjectNa
                                         hoverCard.sample.id === sample.id &&
                                         hoverCard.stem.id === stem.id;
                                       return (
-                                        <div
+                                        <li
                                           key={stem.id}
                                           style={{
-                                            flex: "0 0 auto",
-                                            display: "flex",
+                                            display: "grid",
+                                            gridTemplateColumns: "minmax(0, 1fr) auto",
                                             alignItems: "center",
-                                            gap: "6px",
-                                            padding: "0 12px",
-                                            height: `${NAV_ITEM_HEIGHT - 8}px`,
-                                            borderRadius: "999px",
-                                            border: `1px solid ${
-                                              isHoveringStem ? theme.button.primary : theme.border
-                                            }`,
-                                            background: `${stem.color}24`,
-                                            boxShadow: isHoveringStem ? theme.cardGlow : "none"
+                                            gap: "6px"
                                           }}
                                           draggable
                                           onDragStart={(event) => {
@@ -1059,20 +982,31 @@ export function ProjectNavigator({ selectedSampleId, onSelectSample }: ProjectNa
                                         >
                                           <span
                                             style={{
-                                              width: "10px",
-                                              height: "10px",
-                                              borderRadius: "50%",
-                                              background: stem.color
-                                            }}
-                                          ></span>
-                                          <span
-                                            style={{
-                                              fontSize: "0.72rem",
-                                              color: theme.text,
-                                              whiteSpace: "nowrap"
+                                              display: "flex",
+                                              alignItems: "center",
+                                              gap: "6px",
+                                              minWidth: 0,
+                                              fontWeight: isHoveringStem ? 600 : 400,
+                                              color: theme.text
                                             }}
                                           >
-                                            {stem.name}
+                                            <span
+                                              style={{
+                                                width: "6px",
+                                                height: "6px",
+                                                borderRadius: "50%",
+                                                background: stem.color
+                                              }}
+                                            ></span>
+                                            <span
+                                              style={{
+                                                whiteSpace: "nowrap",
+                                                overflow: "hidden",
+                                                textOverflow: "ellipsis"
+                                              }}
+                                            >
+                                              {stem.name}
+                                            </span>
                                           </span>
                                           <button
                                             type="button"
@@ -1081,36 +1015,37 @@ export function ProjectNavigator({ selectedSampleId, onSelectSample }: ProjectNa
                                               void playStem(sample, stem);
                                             }}
                                             style={{
-                                              width: "24px",
-                                              height: "24px",
-                                              borderRadius: "50%",
+                                              all: "unset",
+                                              cursor: "pointer",
+                                              padding: "2px 6px",
+                                              borderRadius: "999px",
                                               border: `1px solid ${theme.button.outline}`,
                                               background:
                                                 playingId === stem.id
                                                   ? theme.button.primary
-                                                  : theme.button.base,
+                                                  : "transparent",
                                               color:
                                                 playingId === stem.id
                                                   ? theme.button.primaryText
                                                   : theme.text,
-                                              cursor: "pointer",
-                                              fontSize: "0.68rem"
+                                              fontSize: "0.6rem",
+                                              textTransform: "uppercase"
                                             }}
                                           >
-                                            {playingId === stem.id ? "■" : "▶"}
+                                            {playingId === stem.id ? "Stop" : "Play"}
                                           </button>
-                                        </div>
+                                        </li>
                                       );
                                     })}
-                                  </div>
+                                  </ul>
                                 )}
                                 {measure.beats && measure.beats.length > 0 && (
                                   <div
                                     style={{
                                       display: "flex",
-                                      gap: "6px",
-                                      overflowX: "auto",
-                                      padding: "0 2px 2px"
+                                      flexWrap: "wrap",
+                                      gap: "4px",
+                                      marginLeft: "16px"
                                     }}
                                   >
                                     {measure.beats.map((beat) => {
@@ -1140,23 +1075,18 @@ export function ProjectNavigator({ selectedSampleId, onSelectSample }: ProjectNa
                                             )
                                           }
                                           style={{
-                                            flex: "0 0 auto",
-                                            display: "flex",
-                                            alignItems: "center",
-                                            gap: "6px",
-                                            height: `${NAV_ITEM_HEIGHT - 8}px`,
-                                            padding: "0 12px",
+                                            all: "unset",
+                                            cursor: "pointer",
+                                            padding: "2px 6px",
                                             borderRadius: "999px",
                                             border: `1px solid ${
-                                              isActive ? theme.button.primary : theme.border
+                                              isActive ? theme.button.primary : theme.button.outline
                                             }`,
                                             background: isActive
-                                              ? `${theme.button.primary}24`
-                                              : theme.surfaceOverlay,
+                                              ? `${theme.button.primary}22`
+                                              : "transparent",
                                             color: theme.text,
-                                            fontSize: "0.72rem",
-                                            cursor: "pointer",
-                                            boxShadow: isActive ? theme.cardGlow : "none"
+                                            fontSize: "0.6rem"
                                           }}
                                           draggable
                                           onDragStart={(event) => {
@@ -1171,13 +1101,7 @@ export function ProjectNavigator({ selectedSampleId, onSelectSample }: ProjectNa
                                             );
                                           }}
                                         >
-                                          <span style={{ fontWeight: 600 }}>B{beat.index + 1}</span>
-                                          <span style={{ color: theme.textMuted }}>
-                                            {(beat.end - beat.start).toFixed(2)}s
-                                          </span>
-                                          <span style={{ color: theme.button.primary }}>
-                                            {playingId === beat.id ? "■" : "▶"}
-                                          </span>
+                                          B{beat.index + 1}
                                         </button>
                                       );
                                     })}
@@ -1186,15 +1110,15 @@ export function ProjectNavigator({ selectedSampleId, onSelectSample }: ProjectNa
                               </li>
                             );
                           })}
-                        </ul>
+                        </ol>
                       )}
-                    </div>
-                  </details>
-                </div>
-              )}
-            </div>
-          );
-        })}
+                    </section>
+                  </div>
+                )}
+              </li>
+            );
+          })}
+        </ul>
       </div>
 
       {hoverCard && typeof window !== "undefined" && (() => {
