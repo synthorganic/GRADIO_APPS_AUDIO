@@ -7,43 +7,80 @@ interface MasterControlsProps {
   project: Project;
 }
 
-const PROJECT_SCALES = [
-  "C Major",
-  "G Major",
-  "D Major",
-  "A Major",
-  "E Major",
-  "B Major",
-  "F# Major",
-  "C# Major",
-  "F Major",
-  "Bb Major",
-  "Eb Major",
-  "Ab Major",
-  "Db Major",
-  "Gb Major",
-  "C Minor",
-  "G Minor",
-  "D Minor",
-  "A Minor",
-  "E Minor",
-  "B Minor",
-  "F# Minor",
-  "C# Minor",
+const CAMELOT_ENTRIES = [
+  { code: "1A", label: "Ab Minor" },
+  { code: "2A", label: "Eb Minor" },
+  { code: "3A", label: "Bb Minor" },
+  { code: "4A", label: "F Minor" },
+  { code: "5A", label: "C Minor" },
+  { code: "6A", label: "G Minor" },
+  { code: "7A", label: "D Minor" },
+  { code: "8A", label: "A Minor" },
+  { code: "9A", label: "E Minor" },
+  { code: "10A", label: "B Minor" },
+  { code: "11A", label: "F# Minor" },
+  { code: "12A", label: "Db Minor" },
+  { code: "1B", label: "B Major" },
+  { code: "2B", label: "F# Major" },
+  { code: "3B", label: "Db Major" },
+  { code: "4B", label: "Ab Major" },
+  { code: "5B", label: "Eb Major" },
+  { code: "6B", label: "Bb Major" },
+  { code: "7B", label: "F Major" },
+  { code: "8B", label: "C Major" },
+  { code: "9B", label: "G Major" },
+  { code: "10B", label: "D Major" },
+  { code: "11B", label: "A Major" },
+  { code: "12B", label: "E Major" }
 ];
+
+const CAMELOT_SCALES = CAMELOT_ENTRIES.map(({ code, label }) => `${code} (${label})`);
+
+const LEGACY_SCALE_TO_CAMELOT = CAMELOT_ENTRIES.reduce<Record<string, string>>(
+  (mapping, entry) => {
+    mapping[entry.label] = `${entry.code} (${entry.label})`;
+    return mapping;
+  },
+  {
+    "C# Major": "3B (Db Major)",
+    "Gb Major": "2B (F# Major)",
+    "C# Minor": "12A (Db Minor)",
+    "Gb Minor": "11A (F# Minor)",
+    "F# Major": "2B (F# Major)",
+    "F# Minor": "11A (F# Minor)",
+    "Db Major": "3B (Db Major)",
+    "Db Minor": "12A (Db Minor)",
+  }
+);
+
+const PROJECT_SCALES = CAMELOT_SCALES;
+
+function normalizeScale(value: string) {
+  if (PROJECT_SCALES.includes(value)) {
+    return value;
+  }
+  return LEGACY_SCALE_TO_CAMELOT[value] ?? value;
+}
 
 export function MasterControls({ project }: MasterControlsProps) {
   const { dispatch } = useProjectStore();
   const [bpm, setBpm] = useState(project.masterBpm);
-  const [scale, setScale] = useState(project.scale);
+  const [scale, setScale] = useState(() => normalizeScale(project.scale));
 
   useEffect(() => {
     setBpm(project.masterBpm);
   }, [project.masterBpm]);
 
   useEffect(() => {
-    setScale(project.scale);
-  }, [project.scale]);
+    const normalized = normalizeScale(project.scale);
+    setScale(normalized);
+    if (normalized !== project.scale) {
+      dispatch({
+        type: "set-project",
+        project: { ...project, scale: normalized }
+      });
+    }
+  }, [dispatch, project, project.scale]);
 
   return (
     <div style={{ display: "flex", alignItems: "center", gap: "12px" }}>
@@ -103,10 +140,11 @@ export function MasterControls({ project }: MasterControlsProps) {
             value={scale}
             onChange={(event) => {
               const nextScale = event.target.value;
-              setScale(nextScale);
+              const normalized = normalizeScale(nextScale);
+              setScale(normalized);
               dispatch({
                 type: "set-project",
-                project: { ...project, scale: nextScale }
+                project: { ...project, scale: normalized }
               });
             }}
             style={{
@@ -115,7 +153,7 @@ export function MasterControls({ project }: MasterControlsProps) {
               borderRadius: "8px",
               border: `1px solid ${theme.border}`,
               fontSize: "0.85rem",
-              width: "110px",
+              width: "160px",
               background: theme.surfaceOverlay,
               color: theme.text
             }}

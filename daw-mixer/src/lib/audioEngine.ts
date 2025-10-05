@@ -17,6 +17,12 @@ export interface AudioEngineOptions {
   onMeasure?: (measure: Measure) => void;
 }
 
+interface PlaybackOptions {
+  timelineOffset?: number;
+  emitTimelineEvents?: boolean;
+  loop?: boolean;
+}
+
 export class AudioEngine {
   private context = new AudioContext();
   private gainNode = this.context.createGain();
@@ -97,11 +103,7 @@ export class AudioEngine {
     return pending;
   }
 
-  async play(
-    target: PlaybackTarget,
-    measures?: Measure[],
-    options: { timelineOffset?: number; emitTimelineEvents?: boolean } = {}
-  ) {
+  async play(target: PlaybackTarget, measures?: Measure[], options: PlaybackOptions = {}) {
     await this.context.resume();
     const buffer = await this.decodeSample(target);
     if (!buffer) return;
@@ -117,12 +119,21 @@ export class AudioEngine {
     this.timelineOffset = options.timelineOffset ?? 0;
     this.shouldEmitTimelineEvents = options.emitTimelineEvents ?? true;
     const { startOffset, duration } = getPlaybackOffsets(target);
-    if (duration !== undefined) {
-      source.start(0, startOffset, duration);
+    const baseStart = startOffset ?? 0;
+    const playbackDuration = duration ?? buffer.duration - baseStart;
+    const shouldLoop = options.loop ?? false;
+    source.loop = shouldLoop;
+    if (shouldLoop) {
+      source.loopStart = baseStart;
+      source.loopEnd = baseStart + playbackDuration;
+      source.start(0, baseStart);
+      this.playbackDuration = playbackDuration;
+    } else if (duration !== undefined) {
+      source.start(0, baseStart, duration);
       this.playbackDuration = duration;
     } else {
-      source.start(0, startOffset);
-      this.playbackDuration = buffer.duration - startOffset;
+      source.start(0, baseStart);
+      this.playbackDuration = playbackDuration;
     }
     source.onended = () => {
       this.handleSourceEnded(source);
@@ -159,7 +170,7 @@ export class AudioEngine {
     target: PlaybackTarget,
     segmentStart: number,
     segmentDuration: number,
-    options: { timelineOffset?: number; emitTimelineEvents?: boolean } = {}
+    options: PlaybackOptions = {}
   ) {
     await this.context.resume();
     const buffer = await this.decodeSample(target);
@@ -170,8 +181,16 @@ export class AudioEngine {
     source.buffer = buffer;
     this.connectThroughChain(source, []);
     const { startOffset } = getPlaybackOffsets(target);
-    const start = startOffset + segmentStart;
-    source.start(0, start, segmentDuration);
+    const start = (startOffset ?? 0) + segmentStart;
+    const shouldLoop = options.loop ?? false;
+    source.loop = shouldLoop;
+    if (shouldLoop) {
+      source.loopStart = start;
+      source.loopEnd = start + segmentDuration;
+      source.start(0, start);
+    } else {
+      source.start(0, start, segmentDuration);
+    }
     this.activeSources = [source];
     this.startTime = this.context.currentTime;
     this.startOffset = start;
@@ -190,7 +209,7 @@ export class AudioEngine {
     sample: SampleClip,
     stem: StemInfo,
     measures?: Measure[],
-    options: { timelineOffset?: number; emitTimelineEvents?: boolean } = {}
+    options: PlaybackOptions = {}
   ) {
     await this.context.resume();
     const buffer = await this.decodeSample(sample);
@@ -206,17 +225,26 @@ export class AudioEngine {
     const { startOffset, duration } = getPlaybackOffsets(stem);
     this.activeSources = [source];
     this.startTime = this.context.currentTime;
-    this.startOffset = startOffset ?? 0;
+    const baseStart = startOffset ?? 0;
+    this.startOffset = baseStart;
     this.scheduledMeasures = measures ?? [];
     this.timelineOffset = options.timelineOffset ?? 0;
     this.shouldEmitTimelineEvents = options.emitTimelineEvents ?? true;
 
-    if (duration !== undefined) {
-      source.start(0, startOffset ?? 0, duration);
+    const playbackDuration = duration ?? buffer.duration - baseStart;
+    const shouldLoop = options.loop ?? false;
+    source.loop = shouldLoop;
+    if (shouldLoop) {
+      source.loopStart = baseStart;
+      source.loopEnd = baseStart + playbackDuration;
+      source.start(0, baseStart);
+      this.playbackDuration = playbackDuration;
+    } else if (duration !== undefined) {
+      source.start(0, baseStart, duration);
       this.playbackDuration = duration;
     } else {
-      source.start(0, startOffset ?? 0);
-      this.playbackDuration = buffer.duration - (startOffset ?? 0);
+      source.start(0, baseStart);
+      this.playbackDuration = playbackDuration;
     }
 
     source.onended = () => {
@@ -470,14 +498,16 @@ export class AudioEngine {
       }
       case "percussion": {
         const snap = createFilter("highpass", 2000, 0.7);
+        const midAttenuation = createFilter("peaking", 950, 1.4, -8);
         const sparkle = createFilter("peaking", 5200, 1.2, 5);
-        return [snap, sparkle];
+        return [snap, midAttenuation, sparkle];
       }
       case "kicks": {
         const subTrim = createFilter("highpass", 45, 0.8);
         const punch = createFilter("peaking", 120, 1.05, 5.5);
         const tighten = createFilter("lowpass", 260, 0.85);
-        return [subTrim, punch, tighten];
+        const airDamp = createFilter("highshelf", 1200, 0.9, -6);
+        return [subTrim, punch, tighten, airDamp];
       }
       case "bass": {
         const lowCut = createFilter("highpass", 35, 0.8);
