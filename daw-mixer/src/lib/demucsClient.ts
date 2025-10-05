@@ -50,12 +50,36 @@ export interface DemucsResult {
   key: string;
 }
 
-const STEM_TYPES: Array<{ type: StemInfo["type"]; label: string; color: string }> = [
-  { type: "full", label: "Full Mix", color: "#f08ab9" },
-  { type: "vocals", label: "Vocal", color: "#f2b08d" },
-  { type: "leads", label: "Leads", color: "#f7d86d" },
+const STEM_TYPES: Array<{
+  type: StemInfo["type"];
+  label: string;
+  color: string;
+  model?: string;
+  notes?: string;
+}> = [
+  { type: "full", label: "Full Mix", color: "#f08ab9", notes: "Reference stereo bounce" },
+  {
+    type: "vocals",
+    label: "Vocal",
+    color: "#f2b08d",
+    model: "UVR-MDX-NET Karaoke v2",
+    notes: "De-essed to calm top-end shimmer"
+  },
+  {
+    type: "leads",
+    label: "Leads",
+    color: "#f7d86d",
+    model: "UVR-MDX-NET Main",
+    notes: "High-pass focused to keep bass spill minimal"
+  },
   { type: "percussion", label: "High Drums", color: "#87c7de" },
-  { type: "kicks", label: "Kicks", color: "#7cd4c2" },
+  {
+    type: "kicks",
+    label: "Kicks",
+    color: "#7cd4c2",
+    model: "UVR-MDX-NET Percussion v3",
+    notes: "Sub energy trimmed for tighter punch"
+  },
   { type: "bass", label: "Bassline", color: "#4c6edb" }
 ];
 
@@ -90,7 +114,9 @@ export async function runDemucs(file: File | undefined): Promise<DemucsResult> {
     type: stem.type,
     color: stem.color,
     startOffset: 0,
-    duration: measureDuration * measureCount
+    duration: measureDuration * measureCount,
+    extractionModel: stem.model,
+    processingNotes: stem.notes
   }));
 
   return {

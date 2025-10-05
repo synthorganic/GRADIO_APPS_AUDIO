@@ -18,6 +18,8 @@ export interface StemInfo {
   sourceStemId?: string;
   startOffset?: number;
   duration?: number;
+  extractionModel?: string;
+  processingNotes?: string;
 }
 
 export interface Measure {

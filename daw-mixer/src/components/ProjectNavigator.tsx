@@ -54,6 +54,11 @@ export function ProjectNavigator({ selectedSampleId, onSelectSample }: ProjectNa
   const [playingId, setPlayingId] = useState<string | null>(null);
   const [contextMenu, setContextMenu] = useState<ContextMenuState | null>(null);
   const [measureMenu, setMeasureMenu] = useState<MeasureContextMenuState | null>(null);
+  const [hoveredBeat, setHoveredBeat] = useState<{
+    sampleId: string;
+    measureId: string;
+    beat: Beat;
+  } | null>(null);
 
   useEffect(() => {
     const closeMenu = () => {
@@ -672,16 +677,16 @@ export function ProjectNavigator({ selectedSampleId, onSelectSample }: ProjectNa
                     >
                       Measures
                     </summary>
-                    <ul
-                      style={{
-                        listStyle: "none",
-                        margin: "10px 0 0",
-                        padding: 0,
-                        display: "flex",
-                        flexDirection: "column",
-                        gap: "10px"
-                      }}
-                    >
+                      <ul
+                        style={{
+                          listStyle: "none",
+                          margin: "6px 0 0",
+                          padding: 0,
+                          display: "flex",
+                          flexDirection: "column",
+                          gap: "6px"
+                        }}
+                      >
                       {sample.measures.length === 0 && (
                         <li style={{ fontSize: "0.78rem", color: theme.textMuted }}>
                           Waiting for measure detection…
@@ -695,17 +700,23 @@ export function ProjectNavigator({ selectedSampleId, onSelectSample }: ProjectNa
                           measure.detectedPitch &&
                           measure.tunedPitch !== measure.detectedPitch;
                         const measureStems = sliceStemsForRange(sample, measure.start, measure.end);
+                        const hoveredBeatInMeasure =
+                          hoveredBeat &&
+                          hoveredBeat.sampleId === sample.id &&
+                          hoveredBeat.measureId === measure.id
+                            ? hoveredBeat
+                            : null;
                         return (
                           <li
                             key={measure.id}
                             style={{
                               border: `1px solid ${theme.border}`,
-                              borderRadius: "10px",
+                              borderRadius: "8px",
                               background: theme.surface,
-                              padding: "10px 12px",
+                              padding: "8px 10px",
                               display: "flex",
                               flexDirection: "column",
-                              gap: "10px"
+                              gap: "8px"
                             }}
                             onContextMenu={(event) =>
                               handleMeasureContextMenu(event, sample.id, measure.id)
@@ -716,7 +727,7 @@ export function ProjectNavigator({ selectedSampleId, onSelectSample }: ProjectNa
                                 display: "flex",
                                 alignItems: "center",
                                 justifyContent: "space-between",
-                                gap: "12px"
+                                gap: "8px"
                               }}
                               draggable
                               onDragStart={(event) => {
@@ -744,7 +755,7 @@ export function ProjectNavigator({ selectedSampleId, onSelectSample }: ProjectNa
                                   {hasRetune ? " (re-keyed)" : ""}
                                 </span>
                               </div>
-                              <div style={{ display: "flex", alignItems: "center", gap: "8px" }}>
+                              <div style={{ display: "flex", alignItems: "center", gap: "6px" }}>
                                 <span style={{ fontSize: "0.7rem", color: theme.textMuted }}>
                                   Energy {Math.round((measure.energy ?? 0) * 100)}%
                                 </span>
@@ -823,20 +834,38 @@ export function ProjectNavigator({ selectedSampleId, onSelectSample }: ProjectNa
                                     <span
                                       style={{
                                         display: "flex",
-                                        alignItems: "center",
-                                        gap: "8px",
+                                        flexDirection: "column",
+                                        gap: stem.extractionModel || stem.processingNotes ? "2px" : 0,
                                         color: theme.text
                                       }}
                                     >
                                       <span
                                         style={{
-                                          width: "8px",
-                                          height: "8px",
-                                          borderRadius: "50%",
-                                          background: stem.color
+                                          display: "flex",
+                                          alignItems: "center",
+                                          gap: "6px"
                                         }}
-                                      ></span>
-                                      {stem.name}
+                                      >
+                                        <span
+                                          style={{
+                                            width: "8px",
+                                            height: "8px",
+                                            borderRadius: "50%",
+                                            background: stem.color
+                                          }}
+                                        ></span>
+                                        {stem.name}
+                                      </span>
+                                      {(stem.extractionModel || stem.processingNotes) && (
+                                        <span style={{ fontSize: "0.6rem", color: theme.textMuted }}>
+                                          {stem.extractionModel}
+                                          {stem.processingNotes
+                                            ? stem.extractionModel
+                                              ? ` • ${stem.processingNotes}`
+                                              : stem.processingNotes
+                                            : ""}
+                                        </span>
+                                      )}
                                     </span>
                                     <button
                                       type="button"
@@ -866,46 +895,49 @@ export function ProjectNavigator({ selectedSampleId, onSelectSample }: ProjectNa
                             </details>
 
                             {measure.beats && measure.beats.length > 0 && (
-                              <details>
-                                <summary
+                              <div
+                                style={{ position: "relative" }}
+                                onMouseLeave={() => {
+                                  setHoveredBeat((previous) =>
+                                    previous && previous.measureId === measure.id && previous.sampleId === sample.id
+                                      ? null
+                                      : previous
+                                  );
+                                }}
+                              >
+                                <div
                                   style={{
-                                    cursor: "pointer",
-                                    fontSize: "0.78rem",
-                                    color: theme.text,
-                                    listStyle: "none"
-                                  }}
-                                >
-                                  Beats
-                                </summary>
-                                <ul
-                                  style={{
-                                    listStyle: "none",
-                                    margin: "10px 0 0",
-                                    padding: 0,
                                     display: "flex",
-                                    flexDirection: "column",
-                                    gap: "8px"
+                                    flexWrap: "wrap",
+                                    gap: "4px",
+                                    padding: "2px 0"
                                   }}
                                 >
-                                  {measure.beats.map((beat) => (
-                                    <li
-                                      key={beat.id}
-                                      style={{
-                                        border: `1px solid ${theme.border}`,
-                                        borderRadius: "8px",
-                                        padding: "8px 10px",
-                                        background: theme.surfaceOverlay,
-                                        display: "flex",
-                                        flexDirection: "column",
-                                        gap: "8px"
-                                      }}
-                                    >
-                                      <div
+                                  {measure.beats.map((beat) => {
+                                    const isActive = hoveredBeatInMeasure?.beat.id === beat.id;
+                                    return (
+                                      <button
+                                        key={beat.id}
+                                        type="button"
+                                        onClick={(event) => {
+                                          event.stopPropagation();
+                                          void playBeat(sample, beat);
+                                        }}
+                                        onMouseEnter={() => {
+                                          setHoveredBeat({ sampleId: sample.id, measureId: measure.id, beat });
+                                        }}
                                         style={{
+                                          borderRadius: "999px",
+                                          border: `1px solid ${isActive ? theme.button.primary : theme.border}`,
+                                          background: isActive ? `${theme.button.primary}1f` : theme.surfaceOverlay,
+                                          color: theme.text,
+                                          fontSize: "0.66rem",
+                                          padding: "4px 8px",
                                           display: "flex",
                                           alignItems: "center",
-                                          justifyContent: "space-between",
-                                          gap: "8px"
+                                          gap: "6px",
+                                          cursor: "pointer",
+                                          boxShadow: isActive ? theme.cardGlow : "none"
                                         }}
                                         draggable
                                         onDragStart={(event) => {
@@ -920,85 +952,138 @@ export function ProjectNavigator({ selectedSampleId, onSelectSample }: ProjectNa
                                           );
                                         }}
                                       >
-                                        <span style={{ fontSize: "0.76rem", color: theme.text }}>
-                                          Beat {beat.index + 1} • {(beat.end - beat.start).toFixed(2)}s
+                                        <span style={{ fontWeight: 600 }}>B{beat.index + 1}</span>
+                                        <span style={{ color: theme.textMuted }}>
+                                          {(beat.end - beat.start).toFixed(2)}s
                                         </span>
+                                        <span style={{ color: theme.button.primary }}>
+                                          {playingId === beat.id ? "■" : "▶"}
+                                        </span>
+                                      </button>
+                                    );
+                                  })}
+                                </div>
+                                {hoveredBeatInMeasure && (
+                                    <div
+                                      style={{
+                                        position: "absolute",
+                                        top: 0,
+                                        left: "100%",
+                                        marginLeft: "12px",
+                                        padding: "10px 12px",
+                                        background: theme.surfaceOverlay,
+                                        border: `1px solid ${theme.button.outline}`,
+                                        borderRadius: "10px",
+                                        boxShadow: theme.shadow,
+                                        display: "flex",
+                                        flexDirection: "column",
+                                        gap: "8px",
+                                        minWidth: "220px",
+                                        zIndex: 10
+                                      }}
+                                      onMouseEnter={() => {
+                                        setHoveredBeat(hoveredBeatInMeasure);
+                                      }}
+                                      onMouseLeave={() => {
+                                        setHoveredBeat((previous) =>
+                                          previous &&
+                                          previous.measureId === measure.id &&
+                                          previous.sampleId === sample.id
+                                            ? null
+                                            : previous
+                                        );
+                                      }}
+                                    >
+                                      <div
+                                        style={{
+                                          display: "flex",
+                                          alignItems: "center",
+                                          justifyContent: "space-between",
+                                          gap: "8px"
+                                        }}
+                                      >
+                                        <div style={{ display: "flex", flexDirection: "column", gap: "2px" }}>
+                                          <strong style={{ fontSize: "0.72rem", color: theme.text }}>
+                                            Beat {hoveredBeatInMeasure.beat.index + 1}
+                                          </strong>
+                                          <span style={{ fontSize: "0.66rem", color: theme.textMuted }}>
+                                            {hoveredBeatInMeasure.beat.start.toFixed(2)}s →
+                                            {hoveredBeatInMeasure.beat.end.toFixed(2)}s ·
+                                            {(hoveredBeatInMeasure.beat.end - hoveredBeatInMeasure.beat.start).toFixed(2)}s
+                                          </span>
+                                        </div>
                                         <button
                                           type="button"
                                           onClick={(event) => {
                                             event.stopPropagation();
-                                            void playBeat(sample, beat);
+                                            void playBeat(sample, hoveredBeatInMeasure.beat);
                                           }}
                                           style={{
-                                            width: "24px",
-                                            height: "24px",
+                                            width: "26px",
+                                            height: "26px",
                                             borderRadius: "50%",
                                             border: `1px solid ${theme.button.outline}`,
-                                            background: playingId === beat.id
+                                            background: playingId === hoveredBeatInMeasure.beat.id
                                               ? theme.button.primary
                                               : theme.button.base,
-                                            color: playingId === beat.id
+                                            color: playingId === hoveredBeatInMeasure.beat.id
                                               ? theme.button.primaryText
                                               : theme.text,
                                             cursor: "pointer"
                                           }}
                                         >
-                                          {playingId === beat.id ? "■" : "▶"}
+                                          {playingId === hoveredBeatInMeasure.beat.id ? "■" : "▶"}
                                         </button>
                                       </div>
-                                      <details>
-                                        <summary
-                                          style={{
-                                            cursor: "pointer",
-                                            fontSize: "0.74rem",
-                                            color: theme.text,
-                                            listStyle: "none"
-                                          }}
-                                        >
-                                          Beat stems
-                                        </summary>
-                                        <ul
-                                          style={{
-                                            listStyle: "none",
-                                            margin: "8px 0 0",
-                                            padding: 0,
-                                            display: "flex",
-                                            flexDirection: "column",
-                                            gap: "6px"
-                                          }}
-                                        >
-                                          {beat.stems.map((stem) => (
-                                            <li
-                                              key={stem.id}
+                                      <ul
+                                        style={{
+                                          listStyle: "none",
+                                          margin: 0,
+                                          padding: 0,
+                                          display: "flex",
+                                          flexDirection: "column",
+                                          gap: "6px"
+                                        }}
+                                      >
+                                        {hoveredBeatInMeasure.beat.stems.map((stem) => (
+                                          <li
+                                            key={stem.id}
+                                            style={{
+                                              display: "flex",
+                                              justifyContent: "space-between",
+                                              alignItems: "center",
+                                              padding: "6px 8px",
+                                              borderRadius: "8px",
+                                              border: `1px solid ${theme.border}`,
+                                              background: `${stem.color}24`
+                                            }}
+                                            draggable
+                                            onDragStart={(event) => {
+                                              event.dataTransfer.effectAllowed = "copy";
+                                              event.dataTransfer.setData(
+                                                "application/x-stem-fragment",
+                                                JSON.stringify({
+                                                  sampleId: sample.id,
+                                                  stemId: stem.sourceStemId ?? stem.id,
+                                                  start: hoveredBeatInMeasure.beat.start,
+                                                  end: hoveredBeatInMeasure.beat.end
+                                                })
+                                              );
+                                            }}
+                                          >
+                                            <span
                                               style={{
                                                 display: "flex",
-                                                justifyContent: "space-between",
-                                                alignItems: "center",
-                                                padding: "6px 8px",
-                                                borderRadius: "8px",
-                                                border: `1px solid ${theme.border}`,
-                                                background: `${stem.color}24`
-                                              }}
-                                              draggable
-                                              onDragStart={(event) => {
-                                                event.dataTransfer.effectAllowed = "copy";
-                                                event.dataTransfer.setData(
-                                                  "application/x-stem-fragment",
-                                                  JSON.stringify({
-                                                    sampleId: sample.id,
-                                                    stemId: stem.sourceStemId ?? stem.id,
-                                                    start: beat.start,
-                                                    end: beat.end
-                                                  })
-                                                );
+                                                flexDirection: "column",
+                                                gap: stem.extractionModel || stem.processingNotes ? "2px" : 0,
+                                                color: theme.text
                                               }}
                                             >
                                               <span
                                                 style={{
                                                   display: "flex",
                                                   alignItems: "center",
-                                                  gap: "8px",
-                                                  color: theme.text
+                                                  gap: "6px"
                                                 }}
                                               >
                                                 <span
@@ -1011,36 +1096,45 @@ export function ProjectNavigator({ selectedSampleId, onSelectSample }: ProjectNa
                                                 ></span>
                                                 {stem.name}
                                               </span>
-                                              <button
-                                                type="button"
-                                                onClick={(event) => {
-                                                  event.stopPropagation();
-                                                  void playStem(sample, stem);
-                                                }}
-                                                style={{
-                                                  width: "24px",
-                                                  height: "24px",
-                                                  borderRadius: "50%",
-                                                  border: `1px solid ${theme.button.outline}`,
-                                                  background: playingId === stem.id
-                                                    ? theme.button.primary
-                                                    : theme.button.base,
-                                                  color: playingId === stem.id
-                                                    ? theme.button.primaryText
-                                                    : theme.text,
-                                                  cursor: "pointer"
-                                                }}
-                                              >
-                                                {playingId === stem.id ? "■" : "▶"}
-                                              </button>
-                                            </li>
-                                          ))}
-                                        </ul>
-                                      </details>
-                                    </li>
-                                  ))}
-                                </ul>
-                              </details>
+                                              {(stem.extractionModel || stem.processingNotes) && (
+                                                <span style={{ fontSize: "0.6rem", color: theme.textMuted }}>
+                                                  {stem.extractionModel}
+                                                  {stem.processingNotes
+                                                    ? stem.extractionModel
+                                                      ? ` • ${stem.processingNotes}`
+                                                      : stem.processingNotes
+                                                    : ""}
+                                                </span>
+                                              )}
+                                            </span>
+                                            <button
+                                              type="button"
+                                              onClick={(event) => {
+                                                event.stopPropagation();
+                                                void playStem(sample, stem);
+                                              }}
+                                              style={{
+                                                width: "24px",
+                                                height: "24px",
+                                                borderRadius: "50%",
+                                                border: `1px solid ${theme.button.outline}`,
+                                                background: playingId === stem.id
+                                                  ? theme.button.primary
+                                                  : theme.button.base,
+                                                color: playingId === stem.id
+                                                  ? theme.button.primaryText
+                                                  : theme.text,
+                                                cursor: "pointer"
+                                              }}
+                                            >
+                                              {playingId === stem.id ? "■" : "▶"}
+                                            </button>
+                                          </li>
+                                        ))}
+                                      </ul>
+                                    </div>
+                                  )}
+                              </div>
                             )}
                           </li>
                         );
