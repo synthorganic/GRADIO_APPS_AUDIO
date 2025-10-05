@@ -173,6 +173,7 @@ export interface SampleClip {
   retuneMap?: string[];
   rekeyedAt?: string;
   effects: TrackEffects;
+  waveform?: Float32Array;
   isInTimeline?: boolean;
   channelId?: string;
 }
@@ -189,6 +190,7 @@ export interface Project {
   id: string;
   name: string;
   masterBpm: number;
+  scale: string;
   samples: SampleClip[];
   channels: TimelineChannel[];
   mastering: MasteringSettings;

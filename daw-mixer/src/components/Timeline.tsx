@@ -29,7 +29,9 @@ import { TrackEffectsPanel } from "./TrackEffectsPanel";
 type SnapResolution = "measure" | "half-measure" | "beat" | "half-beat";
 
 const MEASURE_WIDTH = 84;
+const TIMELINE_PADDING_MEASURES = 8;
 const CLIP_HEIGHT = 48;
+const CLIP_WAVEFORM_HEIGHT = 28;
 const CHANNEL_HEIGHT = 72;
 const MAX_CLONE_COUNT = 32;
 
@@ -72,6 +74,52 @@ function ensurePointRange(points: AutomationPoint[]) {
   ];
 }
 
+function ClipWaveform({ waveform }: { waveform: Float32Array }) {
+  const path = useMemo(() => {
+    const length = waveform.length;
+    if (length === 0) return null;
+    const viewWidth = Math.max(length - 1, 1);
+    const halfHeight = 50;
+    const scale = viewWidth === 0 ? 0 : viewWidth;
+    const divisor = Math.max(length - 1, 1);
+
+    let commands = `M 0 ${halfHeight}`;
+    for (let index = 0; index < length; index += 1) {
+      const amplitude = Math.min(1, Math.max(0, waveform[index] ?? 0));
+      const x = (index / divisor) * scale;
+      const y = halfHeight - amplitude * (halfHeight - 4);
+      commands += ` L ${x.toFixed(2)} ${y.toFixed(2)}`;
+    }
+    for (let index = length - 1; index >= 0; index -= 1) {
+      const amplitude = Math.min(1, Math.max(0, waveform[index] ?? 0));
+      const x = (index / divisor) * scale;
+      const y = halfHeight + amplitude * (halfHeight - 4);
+      commands += ` L ${x.toFixed(2)} ${y.toFixed(2)}`;
+    }
+    commands += " Z";
+    return { commands, viewWidth };
+  }, [waveform]);
+
+  if (!path) return null;
+
+  return (
+    <svg
+      width="100%"
+      height="100%"
+      viewBox={`0 0 ${Math.max(path.viewWidth, 1)} 100`}
+      preserveAspectRatio="none"
+      style={{ pointerEvents: "none" }}
+    >
+      <path
+        d={path.commands}
+        fill="rgba(255, 255, 255, 0.25)"
+        stroke="rgba(255, 255, 255, 0.4)"
+        strokeWidth={0.5}
+      />
+    </svg>
+  );
+}
+
 export function Timeline({ project, selectedSampleId, onSelectSample }: TimelineProps) {
   const { dispatch, currentProjectId, lastControlTarget } = useProjectStore();
   const scrollRef = useRef<HTMLDivElement | null>(null);
@@ -108,6 +156,7 @@ export function Timeline({ project, selectedSampleId, onSelectSample }: Timeline
   const [isTimelinePlaying, setIsTimelinePlaying] = useState(false);
   const [effectsSampleId, setEffectsSampleId] = useState<string | null>(null);
   const [openMidiChannelId, setOpenMidiChannelId] = useState<string | null>(null);
+  const [clipMenu, setClipMenu] = useState<{ sampleId: string; x: number; y: number } | null>(null);
 
   const { processSample } = useDemucsProcessing((updated) => {
     dispatch({
@@ -153,9 +202,20 @@ export function Timeline({ project, selectedSampleId, onSelectSample }: Timeline
     return Math.max(maxEnd, secondsPerMeasure * 4);
   }, [secondsPerMeasure, timelineSamples]);
 
-  const timelineWidth = useMemo(
-    () => Math.max(totalDuration / secondsPerMeasure, 4) * MEASURE_WIDTH,
+  const timelineMeasures = useMemo(
+    () =>
+      Math.max(totalDuration / secondsPerMeasure + TIMELINE_PADDING_MEASURES, 4 + TIMELINE_PADDING_MEASURES),
     [secondsPerMeasure, totalDuration],
+  );
+
+  const paddedDuration = useMemo(
+    () => timelineMeasures * secondsPerMeasure,
+    [timelineMeasures, secondsPerMeasure],
+  );
+
+  const timelineWidth = useMemo(
+    () => timelineMeasures * MEASURE_WIDTH,
+    [timelineMeasures],
   );
 
   const arrangementClips = useMemo(
@@ -186,12 +246,12 @@ export function Timeline({ project, selectedSampleId, onSelectSample }: Timeline
   const timelineGrid = useMemo(() => {
     const divisor = SNAP_DIVISORS[snapResolution];
     const ticks: Array<{ position: number; accent: number }> = [];
-    const measures = Math.ceil(totalDuration / secondsPerMeasure);
-    for (let measure = 0; measure < measures * divisor; measure += 1) {
-      ticks.push({ position: measure / divisor, accent: measure % divisor });
+    const totalTicks = Math.ceil(timelineMeasures * divisor);
+    for (let index = 0; index < totalTicks; index += 1) {
+      ticks.push({ position: index / divisor, accent: index % divisor });
     }
     return ticks;
-  }, [secondsPerMeasure, snapResolution, totalDuration]);
+  }, [snapResolution, timelineMeasures]);
 
   useEffect(() => {
     const handlePlay = (event: Event) => {
@@ -225,6 +285,42 @@ export function Timeline({ project, selectedSampleId, onSelectSample }: Timeline
       setEffectsSampleId(null);
     }
   }, [effectsSampleId, project.samples]);
+
+  useEffect(() => {
+    const closeMenu = () => setClipMenu(null);
+    window.addEventListener("click", closeMenu);
+    return () => {
+      window.removeEventListener("click", closeMenu);
+    };
+  }, []);
+
+  useEffect(() => {
+    if (!clipMenu) return;
+    const exists = project.samples.some((sample) => sample.id === clipMenu.sampleId);
+    if (!exists) {
+      setClipMenu(null);
+    }
+  }, [clipMenu, project.samples]);
+
+  useEffect(() => {
+    let cancelled = false;
+    const pending = timelineSamples.filter((sample) => (sample.url || sample.file) && !sample.waveform);
+    pending.forEach((sample) => {
+      void (async () => {
+        const peaks = await audioEngine.getWaveformPeaks(sample, 320);
+        if (!peaks || cancelled) return;
+        dispatch({
+          type: "update-sample",
+          projectId: currentProjectId,
+          sampleId: sample.id,
+          sample: { waveform: peaks },
+        });
+      })();
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, [currentProjectId, dispatch, timelineSamples]);
 
   const projectDropPosition = useCallback(
     (event: DragEvent<HTMLDivElement>) => {
@@ -568,6 +664,7 @@ export function Timeline({ project, selectedSampleId, onSelectSample }: Timeline
       if (!sample.channelId) return;
       const container = scrollRef.current;
       if (!container) return;
+      setClipMenu(null);
       event.currentTarget.setPointerCapture(event.pointerId);
       dragState.current = {
         sampleId: sample.id,
@@ -578,7 +675,7 @@ export function Timeline({ project, selectedSampleId, onSelectSample }: Timeline
         channelId: sample.channelId,
       };
     },
-    [],
+    [setClipMenu],
   );
 
   const handleClipPointerMove = useCallback(
@@ -637,6 +734,7 @@ export function Timeline({ project, selectedSampleId, onSelectSample }: Timeline
 
   const handleRemoveClip = useCallback(
     (sample: SampleClip) => {
+      setClipMenu(null);
       if (sample.isFragment) {
         dispatch({ type: "remove-sample", projectId: currentProjectId, sampleId: sample.id });
       } else {
@@ -654,16 +752,16 @@ export function Timeline({ project, selectedSampleId, onSelectSample }: Timeline
         setEffectsSampleId(null);
       }
     },
-    [currentProjectId, dispatch, effectsSampleId, onSelectSample, selectedSampleId],
+    [currentProjectId, dispatch, effectsSampleId, onSelectSample, selectedSampleId, setClipMenu],
   );
 
   const handleClipContextMenu = useCallback(
     (event: ReactMouseEvent, sample: SampleClip) => {
       event.preventDefault();
       event.stopPropagation();
-      handleRemoveClip(sample);
+      setClipMenu({ sampleId: sample.id, x: event.clientX, y: event.clientY });
     },
-    [handleRemoveClip],
+    [setClipMenu],
   );
 
   const clipGradient = useCallback((stems: SampleClip["stems"]) => {
@@ -763,7 +861,7 @@ export function Timeline({ project, selectedSampleId, onSelectSample }: Timeline
     const minValue = Math.min(...values);
     const maxValue = Math.max(...values);
     const range = maxValue - minValue || 1;
-    const timelineLength = Math.max(totalDuration, secondsPerMeasure);
+    const timelineLength = paddedDuration;
     const height = CHANNEL_HEIGHT - 32;
     const width = timelineWidth;
     const pathPoints = sorted
@@ -801,7 +899,7 @@ export function Timeline({ project, selectedSampleId, onSelectSample }: Timeline
   };
 
   const renderMidiLane = (channel: MidiChannel) => {
-    const timelineLength = Math.max(totalDuration, secondsPerMeasure);
+    const timelineLength = paddedDuration;
     return (
       <div
         style={{
@@ -1120,123 +1218,92 @@ export function Timeline({ project, selectedSampleId, onSelectSample }: Timeline
                                 selectedSampleId === sample.id ? theme.button.primary : colorStripe
                               }`,
                               boxShadow: selectedSampleId === sample.id ? theme.cardGlow : "none",
-                              background: clipGradient(sample.stems),
+                              background: theme.surfaceOverlay,
                               cursor: "grab",
                               display: "flex",
                               flexDirection: "column",
-                              justifyContent: "space-between",
-                              padding: "6px 8px",
+                              gap: "6px",
+                              padding: "6px 8px 8px",
                             }}
                             onPointerDown={(event) => handleClipPointerDown(event, sample)}
                             onPointerMove={(event) => handleClipPointerMove(event, sample)}
                             onPointerUp={(event) => handleClipPointerUp(event, sample)}
                             onClick={() => onSelectSample(sample.id)}
                             onContextMenu={(event) => handleClipContextMenu(event, sample)}
+                            onDoubleClick={(event) => {
+                              event.stopPropagation();
+                              playClip(sample);
+                            }}
+                            title={`${clipLabel} • ${sample.length.toFixed(2)}s`}
                           >
-                            <div style={{ display: "flex", justifyContent: "space-between", gap: "6px" }}>
-                              <div style={{ display: "flex", flexDirection: "column", gap: "3px" }}>
-                                <strong style={{ fontSize: "0.72rem" }}>{clipLabel}</strong>
-                                <div
-                                  style={{
-                                    fontSize: "0.62rem",
-                                    color: theme.textMuted,
-                                    display: "flex",
-                                    gap: "6px",
-                                  }}
-                                >
-                                  <span>{sample.bpm ? `${sample.bpm} BPM` : "Analyzing"}</span>
-                                  <span>{sample.key ? `Key ${sample.key}` : "Key TBD"}</span>
-                                  <span>{sample.length.toFixed(2)}s</span>
-                                </div>
-                                <div style={{ display: "flex", gap: "3px" }}>
-                                  {sample.stems.map((stem) => (
-                                    <span
-                                      key={`${sample.id}-${stem.id}-chip`}
-                                      style={{
-                                        width: "7px",
-                                        height: "7px",
-                                        borderRadius: "50%",
-                                        background: stem.color,
-                                        boxShadow: "0 0 6px rgba(0,0,0,0.35)",
-                                      }}
-                                    />
-                                  ))}
-                                </div>
-                              </div>
-                              <div style={{ display: "flex", flexDirection: "column", gap: "6px" }}>
-                                <button
-                                  type="button"
-                                  onClick={(event) => {
-                                    event.stopPropagation();
-                                    playClip(sample);
-                                  }}
-                                  style={{
-                                    padding: "3px 5px",
-                                    borderRadius: "6px",
-                                    border: `1px solid ${theme.button.outline}`,
-                                    background: theme.surface,
-                                    color: theme.text,
-                                    fontSize: "0.62rem",
-                                    cursor: "pointer",
-                                  }}
-                                >
-                                  ▶
-                                </button>
-                                <button
-                                  type="button"
-                                  onClick={(event) => {
-                                    event.stopPropagation();
-                                    duplicateClip(sample);
-                                  }}
-                                  style={{
-                                    padding: "3px 5px",
-                                    borderRadius: "6px",
-                                    border: `1px solid ${theme.button.outline}`,
-                                    background: theme.surface,
-                                    color: theme.text,
-                                    fontSize: "0.62rem",
-                                    cursor: "pointer",
-                                  }}
-                                >
-                                  ⧉
-                                </button>
-                                <button
-                                  type="button"
-                                  onClick={(event) => {
-                                    event.stopPropagation();
-                                    setEffectsSampleId(sample.id);
-                                  }}
-                                  style={{
-                                    padding: "3px 5px",
-                                    borderRadius: "6px",
-                                    border: `1px solid ${theme.button.outline}`,
-                                    background: theme.surface,
-                                    color: theme.text,
-                                    fontSize: "0.62rem",
-                                    cursor: "pointer",
-                                  }}
-                                >
-                                  FX
-                                </button>
-                              </div>
-                            </div>
-                            <div style={{ display: "flex", justifyContent: "space-between", fontSize: "0.65rem" }}>
-                              <button
-                                type="button"
-                                onClick={(event) => {
-                                  event.stopPropagation();
-                                  handleRemoveClip(sample);
-                                }}
+                            <div
+                              style={{
+                                display: "flex",
+                                justifyContent: "space-between",
+                                alignItems: "center",
+                                gap: "8px",
+                              }}
+                            >
+                              <strong
                                 style={{
-                                  border: "none",
-                                  background: "transparent",
-                                  color: theme.textMuted,
-                                  cursor: "pointer",
+                                  fontSize: "0.72rem",
+                                  overflow: "hidden",
+                                  textOverflow: "ellipsis",
+                                  whiteSpace: "nowrap",
                                 }}
                               >
-                                Remove
-                              </button>
-                              <span style={{ color: theme.textMuted }}>{channel.name}</span>
+                                {clipLabel}
+                              </strong>
+                              <span style={{ color: theme.textMuted, fontSize: "0.62rem" }}>{channel.name}</span>
+                            </div>
+                            <div
+                              style={{
+                                position: "relative",
+                                borderRadius: "6px",
+                                overflow: "hidden",
+                                background: clipGradient(sample.stems),
+                                height: `${CLIP_WAVEFORM_HEIGHT}px`,
+                                display: "flex",
+                                alignItems: "center",
+                                justifyContent: "center",
+                              }}
+                            >
+                              {sample.waveform && sample.waveform.length > 0 ? (
+                                <ClipWaveform waveform={sample.waveform} />
+                              ) : (
+                                <span style={{ fontSize: "0.6rem", color: theme.textMuted }}>
+                                  Analyzing waveform…
+                                </span>
+                              )}
+                            </div>
+                            <div
+                              style={{
+                                display: "flex",
+                                justifyContent: "space-between",
+                                alignItems: "center",
+                                fontSize: "0.6rem",
+                                color: theme.textMuted,
+                                gap: "8px",
+                              }}
+                            >
+                              <div style={{ display: "flex", alignItems: "center", gap: "3px" }}>
+                                {sample.stems.map((stem) => (
+                                  <span
+                                    key={`${sample.id}-${stem.id}-chip`}
+                                    style={{
+                                      width: "6px",
+                                      height: "6px",
+                                      borderRadius: "50%",
+                                      background: stem.color,
+                                    }}
+                                  />
+                                ))}
+                              </div>
+                              <div style={{ display: "flex", gap: "8px" }}>
+                                <span>{sample.bpm ? `${sample.bpm} BPM` : "BPM…"}</span>
+                                <span>{sample.key ? `Key ${sample.key}` : "Key…"}</span>
+                                <span>{sample.length.toFixed(2)}s</span>
+                              </div>
                             </div>
                           </div>
                         );
@@ -1261,8 +1328,115 @@ export function Timeline({ project, selectedSampleId, onSelectSample }: Timeline
               boxShadow: `0 0 12px ${theme.button.primary}`,
             }}
           />
-        </div>
       </div>
+    </div>
+
+      {clipMenu && (() => {
+        const sample = project.samples.find((item) => item.id === clipMenu.sampleId);
+        if (!sample) return null;
+        const viewportHeight = typeof window === "undefined" ? 0 : window.innerHeight;
+        const viewportWidth = typeof window === "undefined" ? 0 : window.innerWidth;
+        const menuTop = viewportHeight ? Math.min(clipMenu.y, viewportHeight - 180) : clipMenu.y;
+        const menuLeft = viewportWidth ? Math.min(clipMenu.x, viewportWidth - 220) : clipMenu.x;
+        return (
+          <div
+            style={{
+              position: "fixed",
+              top: `${Math.max(16, menuTop)}px`,
+              left: `${Math.max(16, menuLeft)}px`,
+              background: theme.surfaceOverlay,
+              border: `1px solid ${theme.button.outline}`,
+              borderRadius: "12px",
+              padding: "8px 0",
+              minWidth: "200px",
+              zIndex: 60,
+              boxShadow: theme.shadow,
+            }}
+            onClick={(event) => event.stopPropagation()}
+          >
+            <button
+              type="button"
+              style={{
+                width: "100%",
+                padding: "10px 16px",
+                background: "transparent",
+                border: "none",
+                color: theme.text,
+                textAlign: "left",
+                fontSize: "0.82rem",
+                cursor: "pointer",
+              }}
+              onClick={(event) => {
+                event.stopPropagation();
+                setClipMenu(null);
+                playClip(sample);
+              }}
+            >
+              Preview clip
+            </button>
+            <button
+              type="button"
+              style={{
+                width: "100%",
+                padding: "10px 16px",
+                background: "transparent",
+                border: "none",
+                color: theme.text,
+                textAlign: "left",
+                fontSize: "0.82rem",
+                cursor: "pointer",
+              }}
+              onClick={(event) => {
+                event.stopPropagation();
+                setClipMenu(null);
+                duplicateClip(sample);
+              }}
+            >
+              Duplicate clip
+            </button>
+            <button
+              type="button"
+              style={{
+                width: "100%",
+                padding: "10px 16px",
+                background: "transparent",
+                border: "none",
+                color: theme.text,
+                textAlign: "left",
+                fontSize: "0.82rem",
+                cursor: "pointer",
+              }}
+              onClick={(event) => {
+                event.stopPropagation();
+                setClipMenu(null);
+                setEffectsSampleId(sample.id);
+              }}
+            >
+              Open effects panel
+            </button>
+            <button
+              type="button"
+              style={{
+                width: "100%",
+                padding: "10px 16px",
+                background: "transparent",
+                border: "none",
+                color: theme.text,
+                textAlign: "left",
+                fontSize: "0.82rem",
+                cursor: "pointer",
+              }}
+              onClick={(event) => {
+                event.stopPropagation();
+                setClipMenu(null);
+                handleRemoveClip(sample);
+              }}
+            >
+              Remove from timeline
+            </button>
+          </div>
+        );
+      })()}
 
       {effectsSampleId && (() => {
         const target = project.samples.find((sample) => sample.id === effectsSampleId);

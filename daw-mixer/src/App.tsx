@@ -10,6 +10,8 @@ import type { SampleClip } from "./types";
 import { theme } from "./theme";
 import { MixerPanel } from "./components/MixerPanel";
 import { audioEngine } from "./lib/audioEngine";
+import { TopMenu } from "./components/TopMenu";
+import soniqLogo from "./assets/soniq-logo.svg";
 
 type FloatingPanel = "mixer" | "vst" | "sample";
 
@@ -71,7 +73,7 @@ function AppShell() {
           display: "flex",
           justifyContent: "space-between",
           alignItems: "center",
-          gap: "12px",
+          gap: "16px",
           borderBottom: `1px solid ${theme.border}`,
           background: theme.surfaceRaised,
           boxShadow: theme.shadow,
@@ -79,17 +81,14 @@ function AppShell() {
           zIndex: 2
         }}
       >
-        <h1
-          style={{
-            margin: 0,
-            fontSize: "1.3rem",
-            letterSpacing: "0.06em",
-            textTransform: "uppercase",
-            color: theme.text
-          }}
-        >
-          Chromatic Collage Lab
-        </h1>
+        <div style={{ display: "flex", alignItems: "center", gap: "18px" }}>
+          <TopMenu />
+          <img
+            src={soniqLogo}
+            alt="SONiQ"
+            style={{ height: "32px", objectFit: "contain", pointerEvents: "none" }}
+          />
+        </div>
         <div style={{ display: "flex", alignItems: "center", gap: "10px" }}>
           <MasterControls project={project} />
           <div style={{ display: "flex", gap: "6px" }}>
