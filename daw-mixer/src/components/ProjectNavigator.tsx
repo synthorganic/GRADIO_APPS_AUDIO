@@ -27,15 +27,6 @@ interface ProjectNavigatorProps {
   onSelectSample: (id: string | null) => void;
 }
 
-const paletteOrder: Array<SampleClip["stems"][number]["type"]> = [
-  "full",
-  "vocals",
-  "leads",
-  "percussion",
-  "kicks",
-  "bass"
-];
-
 interface ContextMenuState {
   sampleId: string;
   x: number;
@@ -69,9 +60,14 @@ export function ProjectNavigator({ selectedSampleId, onSelectSample }: ProjectNa
       setContextMenu(null);
       setMeasureMenu(null);
     };
+    const handleAudioStop = () => {
+      setPlayingId(null);
+    };
     window.addEventListener("click", closeMenu);
+    window.addEventListener("audio-stop", handleAudioStop);
     return () => {
       window.removeEventListener("click", closeMenu);
+      window.removeEventListener("audio-stop", handleAudioStop);
       audioEngine.stop();
     };
   }, []);
@@ -214,6 +210,48 @@ export function ProjectNavigator({ selectedSampleId, onSelectSample }: ProjectNa
     setExpandedSamples((previous) => ({ ...previous, [fragment.id]: true }));
     onSelectSample(fragment.id);
   };
+
+  const handleDeleteSample = useCallback(
+    (sample: SampleClip) => {
+      setContextMenu(null);
+      const idsToRemove = new Set<string>([sample.id]);
+      project.samples.forEach((item) => {
+        if (item.originSampleId === sample.id) {
+          idsToRemove.add(item.id);
+        }
+      });
+      idsToRemove.forEach((sampleId) =>
+        dispatch({ type: "remove-sample", projectId: currentProjectId, sampleId }),
+      );
+      const removedIds = [...idsToRemove];
+      if (selectedSampleId && removedIds.includes(selectedSampleId)) {
+        onSelectSample(null);
+      }
+      if (playingId && removedIds.includes(playingId)) {
+        audioEngine.stop();
+        setPlayingId(null);
+      }
+    },
+    [currentProjectId, dispatch, onSelectSample, playingId, project.samples, selectedSampleId],
+  );
+
+  const handleSliceMeasure = useCallback(
+    (sample: SampleClip, measure: Measure) => {
+      setMeasureMenu(null);
+      const measureIndex = sample.measures.findIndex((item) => item.id === measure.id);
+      if (measureIndex === -1) return;
+      const fragment = sliceSampleSegment(sample, measure.start, measure.end, {
+        variantLabel: `Measure ${measureIndex + 1}`,
+        position: sample.position + measure.start,
+        channelId: sample.channelId,
+        isInTimeline: true,
+      });
+      dispatch({ type: "add-sample", projectId: currentProjectId, sample: fragment });
+      setExpandedSamples((previous) => ({ ...previous, [sample.id]: true }));
+      onSelectSample(fragment.id);
+    },
+    [currentProjectId, dispatch, onSelectSample],
+  );
 
   const handleGenerateBeats = (sample: SampleClip, measure: Measure) => {
     setMeasureMenu(null);
@@ -363,20 +401,12 @@ export function ProjectNavigator({ selectedSampleId, onSelectSample }: ProjectNa
         {groupedSamples.map((sample) => {
           const expanded = expandedSamples[sample.id] ?? false;
           const isSelected = selectedSampleId === sample.id;
-          const paletteChip = paletteOrder
-            .map((type) => palette[type])
-            .filter((color): color is string => Boolean(color));
-          const summary = [
-            sample.bpm ? `${sample.bpm} BPM` : "Analyzing BPM",
-            sample.key ? `Key ${sample.key}` : "Detecting key",
-            sample.measures.length ? `${sample.measures.length} measures` : "Preparing measures"
-          ].join(" • ");
           return (
             <div
               key={sample.id}
               style={{
                 background: isSelected ? theme.surfaceRaised : theme.surfaceOverlay,
-                borderRadius: "8px",
+                borderRadius: "6px",
                 border: `1px solid ${isSelected ? theme.button.primary : theme.border}`,
                 boxShadow: isSelected ? theme.cardGlow : "none",
                 transition: "border 0.2s ease, box-shadow 0.2s ease",
@@ -390,16 +420,16 @@ export function ProjectNavigator({ selectedSampleId, onSelectSample }: ProjectNa
                   display: "flex",
                   alignItems: "center",
                   justifyContent: "space-between",
-                  padding: "6px 8px",
-                  gap: "8px",
-                  fontSize: "0.72rem"
+                  padding: "4px 6px",
+                  gap: "6px",
+                  fontSize: "0.68rem"
                 }}
               >
                 <div
                   style={{
                     display: "flex",
                     alignItems: "center",
-                    gap: "6px",
+                    gap: "4px",
                     flex: 1,
                     minWidth: 0
                   }}
@@ -411,25 +441,26 @@ export function ProjectNavigator({ selectedSampleId, onSelectSample }: ProjectNa
                       toggleExpand(sample.id);
                     }}
                     style={{
-                      width: "18px",
-                      height: "18px",
+                      width: "16px",
+                      height: "16px",
                       borderRadius: "4px",
                       border: `1px solid ${theme.button.outline}`,
-                      background: "transparent",
+                      background: theme.surface,
                       color: theme.text,
-                      fontSize: "0.6rem",
+                      fontSize: "0.55rem",
                       display: "flex",
                       alignItems: "center",
                       justifyContent: "center",
                       cursor: "pointer",
                       padding: 0
                     }}
+                    aria-label={expanded ? "Collapse sample" : "Expand sample"}
                   >
                     {expanded ? "▾" : "▸"}
                   </button>
                   <strong
                     style={{
-                      fontSize: "0.72rem",
+                      fontSize: "0.7rem",
                       color: theme.text,
                       whiteSpace: "nowrap",
                       overflow: "hidden",
@@ -438,32 +469,8 @@ export function ProjectNavigator({ selectedSampleId, onSelectSample }: ProjectNa
                   >
                     {sample.name}
                   </strong>
-                  <span
-                    style={{
-                      color: theme.textMuted,
-                      fontSize: "0.66rem",
-                      whiteSpace: "nowrap",
-                      overflow: "hidden",
-                      textOverflow: "ellipsis"
-                    }}
-                  >
-                    {summary}
-                  </span>
-                  {sample.retuneMap && (
-                    <span
-                      style={{
-                        color: theme.button.primary,
-                        fontSize: "0.62rem",
-                        whiteSpace: "nowrap",
-                        overflow: "hidden",
-                        textOverflow: "ellipsis"
-                      }}
-                    >
-                      {sample.retuneMap.join(" · ")}
-                    </span>
-                  )}
                 </div>
-                <div style={{ display: "flex", alignItems: "center", gap: "6px" }}>
+                <div style={{ display: "flex", alignItems: "center", gap: "4px" }}>
                   <button
                     type="button"
                     onClick={(event) => {
@@ -471,31 +478,47 @@ export function ProjectNavigator({ selectedSampleId, onSelectSample }: ProjectNa
                       void toggleSamplePlayback(sample);
                     }}
                     style={{
-                      border: "none",
-                      background: "transparent",
-                      color: playingId === sample.id ? theme.button.primary : theme.text,
-                      fontSize: "0.68rem",
-                      fontWeight: 600,
+                      width: "24px",
+                      height: "24px",
+                      borderRadius: "50%",
+                      border: `1px solid ${theme.button.outline}`,
+                      background: playingId === sample.id ? theme.button.primary : theme.button.base,
+                      color: playingId === sample.id ? theme.button.primaryText : theme.text,
                       cursor: "pointer",
-                      padding: 0
+                      display: "flex",
+                      alignItems: "center",
+                      justifyContent: "center",
+                      padding: 0,
+                      boxShadow: playingId === sample.id ? theme.cardGlow : "none"
                     }}
+                    aria-label={playingId === sample.id ? "Stop sample preview" : "Play sample preview"}
                   >
-                    {playingId === sample.id ? "Stop" : "Play"}
+                    {playingId === sample.id ? "■" : "▶"}
                   </button>
-                  <div style={{ display: "flex", gap: "4px" }}>
-                    {paletteChip.map((color) => (
-                      <span
-                        key={`${sample.id}-${color}`}
-                        style={{
-                          width: "6px",
-                          height: "6px",
-                          borderRadius: "50%",
-                          background: color,
-                          boxShadow: "0 0 6px rgba(0,0,0,0.35)"
-                        }}
-                      ></span>
-                    ))}
-                  </div>
+                  <button
+                    type="button"
+                    onClick={(event) => {
+                      event.stopPropagation();
+                      handleDeleteSample(sample);
+                    }}
+                    style={{
+                      width: "22px",
+                      height: "22px",
+                      borderRadius: "50%",
+                      border: `1px solid ${theme.button.outline}`,
+                      background: theme.surface,
+                      color: theme.textMuted,
+                      cursor: "pointer",
+                      display: "flex",
+                      alignItems: "center",
+                      justifyContent: "center",
+                      padding: 0,
+                    }}
+                    aria-label="Delete sample"
+                    title="Delete sample"
+                  >
+                    ✕
+                  </button>
                 </div>
               </div>
 
@@ -1151,6 +1174,25 @@ export function ProjectNavigator({ selectedSampleId, onSelectSample }: ProjectNa
                 >
                   Trim selection…
                 </button>
+                <button
+                  type="button"
+                  style={{
+                    width: "100%",
+                    padding: "10px 14px",
+                    background: "transparent",
+                    border: "none",
+                    color: "#ff6b6b",
+                    textAlign: "left",
+                    fontSize: "0.85rem",
+                    cursor: "pointer",
+                  }}
+                  onClick={(event) => {
+                    event.stopPropagation();
+                    handleDeleteSample(sample);
+                  }}
+                >
+                  Delete sample
+                </button>
               </>
             );
           })()}
@@ -1178,6 +1220,25 @@ export function ProjectNavigator({ selectedSampleId, onSelectSample }: ProjectNa
             if (!sample || !measure) return null;
             return (
               <>
+                <button
+                  type="button"
+                  style={{
+                    width: "100%",
+                    padding: "10px 14px",
+                    background: "transparent",
+                    border: "none",
+                    color: theme.text,
+                    textAlign: "left",
+                    fontSize: "0.85rem",
+                    cursor: "pointer",
+                  }}
+                  onClick={(event) => {
+                    event.stopPropagation();
+                    handleSliceMeasure(sample, measure);
+                  }}
+                >
+                  Create measure clip
+                </button>
                 <button
                   type="button"
                   style={{

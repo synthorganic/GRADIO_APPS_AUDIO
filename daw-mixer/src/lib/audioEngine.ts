@@ -31,13 +31,37 @@ export class AudioEngine {
   private playbackDuration = 0;
   private shouldEmitTimelineEvents = true;
   private channelMix = new Map<string, { volume: number; pan: number }>();
+  private bufferCache = new Map<string, Promise<AudioBuffer | null>>();
 
   constructor(options: AudioEngineOptions = {}) {
     this.gainNode.connect(this.context.destination);
     this.onMeasure = options.onMeasure;
   }
 
-  async decodeSample(target: PlaybackTarget): Promise<AudioBuffer | null> {
+  private getCacheKey(target: PlaybackTarget) {
+    if (isSampleClip(target)) {
+      if (target.originSampleId) {
+        return `sample:${target.originSampleId}`;
+      }
+      if (target.url) {
+        return `url:${target.url}`;
+      }
+      if (target.file) {
+        const { name, size, lastModified } = target.file;
+        return `file:${name}:${size}:${lastModified}`;
+      }
+      return `sample:${target.id}`;
+    }
+    if (target.sourceStemId) {
+      return `stem:${target.sourceStemId}`;
+    }
+    if (target.id) {
+      return `stem:${target.id}`;
+    }
+    return null;
+  }
+
+  private async fetchAndDecode(target: PlaybackTarget): Promise<AudioBuffer | null> {
     try {
       if (isSampleClip(target) && target.file) {
         const arrayBuffer = await target.file.arrayBuffer();
@@ -52,6 +76,25 @@ export class AudioEngine {
       console.error("Failed to decode sample", error);
     }
     return null;
+  }
+
+  async decodeSample(target: PlaybackTarget): Promise<AudioBuffer | null> {
+    const cacheKey = this.getCacheKey(target);
+    if (!cacheKey) {
+      return this.fetchAndDecode(target);
+    }
+    const existing = this.bufferCache.get(cacheKey);
+    if (existing) {
+      return existing;
+    }
+    const pending = this.fetchAndDecode(target).then((buffer) => {
+      if (!buffer) {
+        this.bufferCache.delete(cacheKey);
+      }
+      return buffer;
+    });
+    this.bufferCache.set(cacheKey, pending);
+    return pending;
   }
 
   async play(
@@ -213,6 +256,47 @@ export class AudioEngine {
     this.activeSources = sources;
     this.dispatchPlayEvent();
     this.startWatch();
+  }
+
+  async getWaveformPeaks(sample: SampleClip, resolution = 240): Promise<Float32Array | null> {
+    const buffer = await this.decodeSample(sample);
+    if (!buffer) return null;
+
+    const { startOffset, duration } = getPlaybackOffsets(sample);
+    const baseOffset = startOffset ?? 0;
+    const clipDuration =
+      duration ?? sample.duration ?? sample.length ?? Math.max(buffer.duration - baseOffset, 0);
+
+    const startFrame = Math.max(0, Math.floor(baseOffset * buffer.sampleRate));
+    const totalFrames = Math.floor(clipDuration * buffer.sampleRate);
+    const endFrame = Math.min(buffer.length, startFrame + totalFrames);
+    if (endFrame <= startFrame || totalFrames <= 0) {
+      return new Float32Array();
+    }
+
+    const bucketCount = Math.max(1, Math.min(resolution, endFrame - startFrame));
+    const peaks = new Float32Array(bucketCount);
+    const framesPerBucket = (endFrame - startFrame) / bucketCount;
+
+    for (let bucket = 0; bucket < bucketCount; bucket += 1) {
+      const bucketStart = Math.floor(startFrame + bucket * framesPerBucket);
+      const bucketEnd = Math.max(bucketStart + 1, Math.floor(startFrame + (bucket + 1) * framesPerBucket));
+      let max = 0;
+      for (let frame = bucketStart; frame < bucketEnd; frame += 1) {
+        let amplitude = 0;
+        for (let channelIndex = 0; channelIndex < buffer.numberOfChannels; channelIndex += 1) {
+          const data = buffer.getChannelData(channelIndex);
+          amplitude += Math.abs(data[frame] ?? 0);
+        }
+        amplitude /= buffer.numberOfChannels || 1;
+        if (amplitude > max) {
+          max = amplitude;
+        }
+      }
+      peaks[bucket] = max;
+    }
+
+    return peaks;
   }
 
   stop(emitEvent = true) {

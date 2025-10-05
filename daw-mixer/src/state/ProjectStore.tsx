@@ -69,6 +69,7 @@ const initialProject: Project = {
   id: nanoid(),
   name: "Chromatic Collage",
   masterBpm: 120,
+  scale: "C Major",
   samples: [],
   channels: [createAudioChannel("Channel 1")],
   mastering: {
