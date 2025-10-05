@@ -37,6 +37,21 @@ interface MeasureContextMenuState extends ContextMenuState {
   measureId: string;
 }
 
+const NAV_ITEM_HEIGHT = 44;
+const MAX_VISIBLE_ITEMS = 8;
+
+type HoverCardPayload =
+  | { type: "sample"; sample: SampleClip; rect: DOMRect }
+  | { type: "stem"; sample: SampleClip; stem: StemInfo; rect: DOMRect; measure?: Measure }
+  | { type: "measure"; sample: SampleClip; measure: Measure; rect: DOMRect }
+  | { type: "beat"; sample: SampleClip; measure: Measure; beat: Beat; rect: DOMRect };
+
+type HoverCardRequest =
+  | { type: "sample"; sample: SampleClip }
+  | { type: "stem"; sample: SampleClip; stem: StemInfo; measure?: Measure }
+  | { type: "measure"; sample: SampleClip; measure: Measure }
+  | { type: "beat"; sample: SampleClip; measure: Measure; beat: Beat };
+
 function getMeasureDuration(measure: Measure) {
   return Math.max(0, measure.end - measure.start);
 }
@@ -54,11 +69,31 @@ export function ProjectNavigator({ selectedSampleId, onSelectSample }: ProjectNa
   const [playingId, setPlayingId] = useState<string | null>(null);
   const [contextMenu, setContextMenu] = useState<ContextMenuState | null>(null);
   const [measureMenu, setMeasureMenu] = useState<MeasureContextMenuState | null>(null);
-  const [hoveredBeat, setHoveredBeat] = useState<{
-    sampleId: string;
-    measureId: string;
-    beat: Beat;
-  } | null>(null);
+  const [hoverCard, setHoverCard] = useState<HoverCardPayload | null>(null);
+
+  const showHoverCard = useCallback((element: HTMLElement, payload: HoverCardRequest) => {
+    const rect = element.getBoundingClientRect();
+    setHoverCard({ ...payload, rect } as HoverCardPayload);
+  }, []);
+
+  const clearHoverCard = useCallback((predicate?: (info: HoverCardPayload) => boolean) => {
+    setHoverCard((previous) => {
+      if (!previous) {
+        return null;
+      }
+      if (predicate && !predicate(previous)) {
+        return previous;
+      }
+      return null;
+    });
+  }, []);
+
+  const formatSeconds = (value?: number) => {
+    if (value === undefined || Number.isNaN(value)) {
+      return "—";
+    }
+    return `${value.toFixed(2)}s`;
+  };
 
   useEffect(() => {
     const closeMenu = () => {
@@ -76,6 +111,21 @@ export function ProjectNavigator({ selectedSampleId, onSelectSample }: ProjectNa
       audioEngine.stop();
     };
   }, []);
+
+  useEffect(() => {
+    if (!hoverCard) return;
+    const sampleExists = project.samples.some((item) => item.id === hoverCard.sample.id);
+    if (!sampleExists) {
+      setHoverCard(null);
+      return;
+    }
+    if (hoverCard.type !== "sample") {
+      const isExpanded = expandedSamples[hoverCard.sample.id];
+      if (!isExpanded) {
+        setHoverCard(null);
+      }
+    }
+  }, [expandedSamples, hoverCard, project.samples]);
 
   const addSamples = useCallback(
     async (files: FileList | null) => {
@@ -415,16 +465,19 @@ export function ProjectNavigator({ selectedSampleId, onSelectSample }: ProjectNa
         {groupedSamples.map((sample) => {
           const expanded = expandedSamples[sample.id] ?? false;
           const isSelected = selectedSampleId === sample.id;
+          const isSampleHovered = hoverCard?.type === "sample" && hoverCard.sample.id === sample.id;
+          const highlightSample = isSelected || isSampleHovered;
           return (
             <div
               key={sample.id}
               style={{
-                background: isSelected ? theme.surfaceRaised : theme.surfaceOverlay,
+                background: highlightSample ? theme.surfaceRaised : theme.surfaceOverlay,
                 borderRadius: "12px",
-                border: `1px solid ${isSelected ? theme.button.primary : theme.border}`,
-                boxShadow: isSelected ? theme.cardGlow : "none",
+                border: `1px solid ${highlightSample ? theme.button.primary : theme.border}`,
+                boxShadow: highlightSample ? theme.cardGlow : "none",
                 transition: "border 0.2s ease, box-shadow 0.2s ease",
-                overflow: "hidden"
+                overflow: "visible",
+                position: "relative"
               }}
               onContextMenu={(event) => onSampleContextMenu(event, sample.id)}
               onClick={() => onSelectSample(sample.id)}
@@ -434,10 +487,17 @@ export function ProjectNavigator({ selectedSampleId, onSelectSample }: ProjectNa
                   display: "flex",
                   alignItems: "center",
                   justifyContent: "space-between",
-                  padding: "10px 14px",
+                  padding: "0 14px",
+                  minHeight: `${NAV_ITEM_HEIGHT}px`,
                   gap: "10px",
                   fontSize: "0.78rem"
                 }}
+                onMouseEnter={(event) => {
+                  showHoverCard(event.currentTarget, { type: "sample", sample });
+                }}
+                onMouseLeave={() =>
+                  clearHoverCard((info) => info.type === "sample" && info.sample.id === sample.id)
+                }
               >
                 <div
                   style={{
@@ -455,8 +515,8 @@ export function ProjectNavigator({ selectedSampleId, onSelectSample }: ProjectNa
                       toggleExpand(sample.id);
                     }}
                     style={{
-                      width: "20px",
-                      height: "20px",
+                      width: "22px",
+                      height: "22px",
                       borderRadius: "6px",
                       border: `1px solid ${theme.button.outline}`,
                       background: theme.surface,
@@ -483,6 +543,19 @@ export function ProjectNavigator({ selectedSampleId, onSelectSample }: ProjectNa
                   >
                     {sample.name}
                   </strong>
+                  {sample.variantLabel && (
+                    <span
+                      style={{
+                        fontSize: "0.68rem",
+                        color: theme.button.primary,
+                        background: `${theme.button.primary}20`,
+                        borderRadius: "999px",
+                        padding: "2px 8px"
+                      }}
+                    >
+                      {sample.variantLabel}
+                    </span>
+                  )}
                 </div>
                 <div style={{ display: "flex", alignItems: "center", gap: "8px" }}>
                   <button
@@ -526,7 +599,7 @@ export function ProjectNavigator({ selectedSampleId, onSelectSample }: ProjectNa
                       display: "flex",
                       alignItems: "center",
                       justifyContent: "center",
-                      padding: 0,
+                      padding: 0
                     }}
                     aria-label="Delete sample"
                     title="Delete sample"
@@ -540,7 +613,7 @@ export function ProjectNavigator({ selectedSampleId, onSelectSample }: ProjectNa
                 <div
                   style={{
                     borderTop: `1px solid ${theme.border}`,
-                    padding: "12px 16px",
+                    padding: "10px 12px 12px",
                     display: "flex",
                     flexDirection: "column",
                     gap: "12px"
@@ -549,613 +622,573 @@ export function ProjectNavigator({ selectedSampleId, onSelectSample }: ProjectNa
                   <div
                     style={{
                       display: "flex",
-                      flexDirection: "column",
-                      gap: "8px"
+                      alignItems: "center",
+                      justifyContent: "space-between",
+                      minHeight: `${NAV_ITEM_HEIGHT}px`,
+                      padding: "0 12px",
+                      borderRadius: "10px",
+                      border: `1px solid ${theme.border}`,
+                      background: theme.surface
                     }}
+                    draggable
+                    onDragStart={(event) => {
+                      event.dataTransfer.effectAllowed = "copy";
+                      event.dataTransfer.setData("application/x-sample", sample.id);
+                    }}
+                    onMouseEnter={(event) => showHoverCard(event.currentTarget, { type: "sample", sample })}
+                    onMouseLeave={() =>
+                      clearHoverCard((info) => info.type === "sample" && info.sample.id === sample.id)
+                    }
                   >
-                    <div
-                      style={{
-                        display: "flex",
-                        justifyContent: "space-between",
-                        alignItems: "center",
-                        padding: "12px 16px",
-                        borderRadius: "12px",
-                        border: `1px solid ${theme.border}`,
-                        background: theme.surface
+                    <div style={{ display: "flex", alignItems: "center", gap: "8px", minWidth: 0 }}>
+                      <strong style={{ fontSize: "0.8rem", color: theme.text }}>Full sample</strong>
+                      <span style={{ fontSize: "0.72rem", color: theme.textMuted }}>
+                        {sample.measures.length} measures
+                      </span>
+                      {sample.isFragment && (
+                        <span style={{ fontSize: "0.68rem", color: theme.textMuted }}>(Fragment)</span>
+                      )}
+                    </div>
+                    <button
+                      type="button"
+                      onClick={(event) => {
+                        event.stopPropagation();
+                        void toggleSamplePlayback(sample);
                       }}
-                      draggable
-                      onDragStart={(event) => {
-                        event.dataTransfer.effectAllowed = "copy";
-                        event.dataTransfer.setData("application/x-sample", sample.id);
+                      style={{
+                        width: "28px",
+                        height: "28px",
+                        borderRadius: "50%",
+                        border: `1px solid ${theme.button.outline}`,
+                        background: playingId === sample.id ? theme.button.primary : theme.button.base,
+                        color: playingId === sample.id ? theme.button.primaryText : theme.text,
+                        cursor: "pointer",
+                        boxShadow: playingId === sample.id ? theme.cardGlow : "none"
                       }}
                     >
-                      <div style={{ display: "flex", flexDirection: "column", gap: "4px" }}>
-                        <strong style={{ fontSize: "0.82rem", color: theme.text }}>Full sample</strong>
-                        <span style={{ fontSize: "0.72rem", color: theme.textMuted }}>
-                          {sample.length.toFixed(2)}s • {sample.measures.length} measures
-                        </span>
-                      </div>
-                      <button
-                        type="button"
-                        onClick={(event) => {
-                          event.stopPropagation();
-                          void toggleSamplePlayback(sample);
-                        }}
-                        style={{
-                          width: "30px",
-                          height: "30px",
-                          borderRadius: "50%",
-                          border: `1px solid ${theme.button.outline}`,
-                          background: playingId === sample.id ? theme.button.primary : theme.button.base,
-                          color: playingId === sample.id ? theme.button.primaryText : theme.text,
-                          cursor: "pointer",
-                          fontSize: "0.68rem",
-                          boxShadow: playingId === sample.id ? theme.cardGlow : "none"
-                        }}
-                      >
-                        {playingId === sample.id ? "■" : "▶"}
-                      </button>
-                    </div>
+                      {playingId === sample.id ? "■" : "▶"}
+                    </button>
                   </div>
 
-                  <details open>
+                  <details
+                    open
+                    style={{
+                      borderRadius: "12px",
+                      border: `1px solid ${theme.border}`,
+                      background: theme.surface,
+                      overflow: "hidden"
+                    }}
+                  >
                     <summary
                       style={{
                         cursor: "pointer",
                         fontSize: "0.8rem",
                         color: theme.text,
-                        listStyle: "none"
-                      }}
-                    >
-                      Full stems
-                    </summary>
-                    <ul
-                      style={{
                         listStyle: "none",
-                        margin: "10px 0 0",
-                        padding: 0,
                         display: "flex",
-                        flexDirection: "column",
-                        gap: "8px"
+                        alignItems: "center",
+                        justifyContent: "space-between",
+                        padding: "0 12px",
+                        minHeight: `${NAV_ITEM_HEIGHT}px`
                       }}
                     >
-                      {sample.stems.map((stem) => (
-                        <li
-                          key={stem.id}
+                      <span>Full stems</span>
+                      <span style={{ fontSize: "0.7rem", color: theme.textMuted }}>
+                        {sample.stems.length}
+                      </span>
+                    </summary>
+                    <div
+                      style={{
+                        maxHeight: `${NAV_ITEM_HEIGHT * MAX_VISIBLE_ITEMS}px`,
+                        overflowY: "auto",
+                        padding: "6px 0"
+                      }}
+                    >
+                      {sample.stems.length === 0 ? (
+                        <div
                           style={{
                             display: "flex",
-                            justifyContent: "space-between",
                             alignItems: "center",
-                            padding: "8px 12px",
-                            borderRadius: "10px",
-                            border: `1px solid ${theme.border}`,
-                            background: `${stem.color}1a`
-                          }}
-                          draggable
-                          onDragStart={(event) => {
-                            event.dataTransfer.effectAllowed = "copy";
-                            event.dataTransfer.setData(
-                              "application/x-stem",
-                              JSON.stringify({ sampleId: sample.id, stemId: stem.id })
-                            );
+                            minHeight: `${NAV_ITEM_HEIGHT}px`,
+                            padding: "0 12px",
+                            fontSize: "0.75rem",
+                            color: theme.textMuted
                           }}
                         >
-                          <span style={{ display: "flex", alignItems: "center", gap: "8px", color: theme.text }}>
-                            <span
-                              style={{
-                                width: "10px",
-                                height: "10px",
-                                borderRadius: "50%",
-                                background: stem.color
-                              }}
-                            ></span>
-                            {stem.name}
-                          </span>
-                          <button
-                            type="button"
-                            onClick={(event) => {
-                              event.stopPropagation();
-                              void playStem(sample, stem);
-                            }}
-                            style={{
-                              width: "28px",
-                              height: "28px",
-                              borderRadius: "50%",
-                              border: `1px solid ${theme.button.outline}`,
-                              background: playingId === stem.id ? theme.button.primary : theme.button.base,
-                              color: playingId === stem.id ? theme.button.primaryText : theme.text,
-                              cursor: "pointer",
-                              fontSize: "0.68rem"
-                            }}
-                          >
-                            {playingId === stem.id ? "■" : "▶"}
-                          </button>
-                        </li>
-                      ))}
-                    </ul>
-                  </details>
-
-                  <details open>
-                    <summary
-                      style={{
-                        cursor: "pointer",
-                        fontSize: "0.8rem",
-                        color: theme.text,
-                        listStyle: "none"
-                      }}
-                    >
-                      Measures
-                    </summary>
-                      <ul
-                        style={{
-                          listStyle: "none",
-                          margin: "10px 0 0",
-                          padding: 0,
-                          display: "flex",
-                          flexDirection: "column",
-                          gap: "10px"
-                        }}
-                      >
-                      {sample.measures.length === 0 && (
-                        <li style={{ fontSize: "0.78rem", color: theme.textMuted }}>
-                          Waiting for measure detection…
-                        </li>
-                      )}
-                      {sample.measures.map((measure, index) => {
-                        const duration = getMeasureDuration(measure);
-                        const tunedPitch = measure.tunedPitch ?? measure.detectedPitch;
-                        const hasRetune =
-                          measure.tunedPitch &&
-                          measure.detectedPitch &&
-                          measure.tunedPitch !== measure.detectedPitch;
-                        const measureStems = sliceStemsForRange(sample, measure.start, measure.end);
-                        const hoveredBeatInMeasure =
-                          hoveredBeat &&
-                          hoveredBeat.sampleId === sample.id &&
-                          hoveredBeat.measureId === measure.id
-                            ? hoveredBeat
-                            : null;
-                        return (
-                          <li
-                            key={measure.id}
-                            style={{
-                              border: `1px solid ${theme.border}`,
-                              borderRadius: "12px",
-                              background: theme.surface,
-                              padding: "12px 16px",
-                              display: "flex",
-                              flexDirection: "column",
-                              gap: "12px"
-                            }}
-                            onContextMenu={(event) =>
-                              handleMeasureContextMenu(event, sample.id, measure.id)
-                            }
-                          >
-                            <div
-                              style={{
-                                display: "flex",
-                                alignItems: "center",
-                                justifyContent: "space-between",
-                                gap: "8px"
-                              }}
-                              draggable
-                              onDragStart={(event) => {
-                                event.dataTransfer.effectAllowed = "copy";
-                                event.dataTransfer.setData(
-                                  "application/x-measure",
-                                  JSON.stringify({ sampleId: sample.id, measureId: measure.id })
-                                );
-                              }}
-                              onClick={(event) => {
-                                event.stopPropagation();
-                                onSelectSample(sample.id);
-                              }}
-                            >
-                              <div
+                          Stems will appear after separation
+                        </div>
+                      ) : (
+                        <ul
+                          style={{
+                            listStyle: "none",
+                            margin: 0,
+                            padding: 0,
+                            display: "flex",
+                            flexDirection: "column",
+                            gap: "6px"
+                          }}
+                        >
+                          {sample.stems.map((stem) => {
+                            const isHoveringStem =
+                              hoverCard?.type === "stem" &&
+                              hoverCard.sample.id === sample.id &&
+                              hoverCard.stem.id === stem.id;
+                            return (
+                              <li
+                                key={stem.id}
                                 style={{
                                   display: "flex",
-                                  flexDirection: "column",
-                                  gap: "6px"
+                                  alignItems: "center",
+                                  justifyContent: "space-between",
+                                  height: `${NAV_ITEM_HEIGHT}px`,
+                                  padding: "0 12px",
+                                  borderRadius: "10px",
+                                  border: `1px solid ${
+                                    isHoveringStem ? theme.button.primary : theme.border
+                                  }`,
+                                  background: `${stem.color}1a`,
+                                  boxShadow: isHoveringStem ? theme.cardGlow : "none"
                                 }}
+                                draggable
+                                onDragStart={(event) => {
+                                  event.dataTransfer.effectAllowed = "copy";
+                                  event.dataTransfer.setData(
+                                    "application/x-stem",
+                                    JSON.stringify({ sampleId: sample.id, stemId: stem.id })
+                                  );
+                                }}
+                                onMouseEnter={(event) =>
+                                  showHoverCard(event.currentTarget, { type: "stem", sample, stem })
+                                }
+                                onMouseLeave={() =>
+                                  clearHoverCard(
+                                    (info) =>
+                                      info.type === "stem" &&
+                                      info.sample.id === sample.id &&
+                                      info.stem.id === stem.id
+                                  )
+                                }
                               >
-                        <strong style={{ fontSize: "0.82rem", color: theme.text }}>
-                                  Measure {index + 1}
-                                </strong>
-                                <span style={{ fontSize: "0.78rem", color: theme.textMuted }}>
-                                  {measure.start.toFixed(2)}s → {measure.end.toFixed(2)}s ·
-                                  {duration.toFixed(2)}s · {measure.beatCount} beats
-                                </span>
-                                <span style={{ fontSize: "0.78rem", color: theme.button.primary }}>
-                                  {measure.detectedPitch ?? "?"} → {tunedPitch}
-                                  {hasRetune ? " (re-keyed)" : ""}
-                                </span>
-                              </div>
-                              <div style={{ display: "flex", alignItems: "center", gap: "10px" }}>
-                                <span style={{ fontSize: "0.78rem", color: theme.textMuted }}>
-                                  Energy {Math.round((measure.energy ?? 0) * 100)}%
+                                <span
+                                  style={{
+                                    display: "flex",
+                                    alignItems: "center",
+                                    gap: "8px",
+                                    color: theme.text,
+                                    minWidth: 0
+                                  }}
+                                >
+                                  <span
+                                    style={{
+                                      width: "10px",
+                                      height: "10px",
+                                      borderRadius: "50%",
+                                      background: stem.color
+                                    }}
+                                  ></span>
+                                  <span
+                                    style={{
+                                      whiteSpace: "nowrap",
+                                      overflow: "hidden",
+                                      textOverflow: "ellipsis"
+                                    }}
+                                  >
+                                    {stem.name}
+                                  </span>
                                 </span>
                                 <button
                                   type="button"
                                   onClick={(event) => {
                                     event.stopPropagation();
-                                    void playMeasure(sample, measure);
+                                    void playStem(sample, stem);
                                   }}
                                   style={{
-                                    width: "36px",
-                                    height: "36px",
+                                    width: "26px",
+                                    height: "26px",
                                     borderRadius: "50%",
                                     border: `1px solid ${theme.button.outline}`,
-                                    background: playingId === measure.id
-                                      ? theme.button.primary
-                                      : theme.button.base,
-                                    color: playingId === measure.id
-                                      ? theme.button.primaryText
-                                      : theme.text,
+                                    background:
+                                      playingId === stem.id ? theme.button.primary : theme.button.base,
+                                    color:
+                                      playingId === stem.id ? theme.button.primaryText : theme.text,
                                     cursor: "pointer",
-                                    fontSize: "0.85rem"
+                                    fontSize: "0.68rem"
                                   }}
                                 >
-                                  {playingId === measure.id ? "■" : "▶"}
+                                  {playingId === stem.id ? "■" : "▶"}
                                 </button>
-                              </div>
-                            </div>
+                              </li>
+                            );
+                          })}
+                        </ul>
+                      )}
+                    </div>
+                  </details>
 
-                            <details>
-                              <summary
+                  <details
+                    open
+                    style={{
+                      borderRadius: "12px",
+                      border: `1px solid ${theme.border}`,
+                      background: theme.surface,
+                      overflow: "hidden"
+                    }}
+                  >
+                    <summary
+                      style={{
+                        cursor: "pointer",
+                        fontSize: "0.8rem",
+                        color: theme.text,
+                        listStyle: "none",
+                        display: "flex",
+                        alignItems: "center",
+                        justifyContent: "space-between",
+                        padding: "0 12px",
+                        minHeight: `${NAV_ITEM_HEIGHT}px`
+                      }}
+                    >
+                      <span>Measures</span>
+                      <span style={{ fontSize: "0.7rem", color: theme.textMuted }}>
+                        {sample.measures.length}
+                      </span>
+                    </summary>
+                    <div
+                      style={{
+                        maxHeight: `${NAV_ITEM_HEIGHT * MAX_VISIBLE_ITEMS}px`,
+                        overflowY: "auto",
+                        padding: "6px 0"
+                      }}
+                    >
+                      {sample.measures.length === 0 ? (
+                        <div
+                          style={{
+                            display: "flex",
+                            alignItems: "center",
+                            minHeight: `${NAV_ITEM_HEIGHT}px`,
+                            padding: "0 12px",
+                            fontSize: "0.75rem",
+                            color: theme.textMuted
+                          }}
+                        >
+                          Waiting for measure detection…
+                        </div>
+                      ) : (
+                        <ul
+                          style={{
+                            listStyle: "none",
+                            margin: 0,
+                            padding: 0,
+                            display: "flex",
+                            flexDirection: "column",
+                            gap: "8px"
+                          }}
+                        >
+                          {sample.measures.map((measure, index) => {
+                            const measureStems = sliceStemsForRange(
+                              sample,
+                              measure.start,
+                              measure.end
+                            );
+                            const hoveredBeatId =
+                              hoverCard?.type === "beat" &&
+                              hoverCard.sample.id === sample.id &&
+                              hoverCard.measure.id === measure.id
+                                ? hoverCard.beat.id
+                                : null;
+                            return (
+                              <li
+                                key={measure.id}
                                 style={{
-                                  cursor: "pointer",
-                                  fontSize: "0.82rem",
-                                  color: theme.text,
-                                  listStyle: "none"
-                                }}
-                              >
-                                Measure stems
-                              </summary>
-                              <ul
-                                style={{
-                                  listStyle: "none",
-                                  margin: "12px 0 0",
-                                  padding: 0,
+                                  border: `1px solid ${theme.border}`,
+                                  borderRadius: "12px",
+                                  background: theme.surface,
+                                  padding: "8px 10px",
                                   display: "flex",
                                   flexDirection: "column",
-                                  gap: "8px"
+                                  gap: "6px"
                                 }}
+                                onContextMenu={(event) =>
+                                  handleMeasureContextMenu(event, sample.id, measure.id)
+                                }
                               >
-                                {measureStems.map((stem) => (
-                                  <li
-                                    key={stem.id}
+                                <div
+                                  style={{
+                                    display: "flex",
+                                    alignItems: "center",
+                                    justifyContent: "space-between",
+                                    minHeight: `${NAV_ITEM_HEIGHT}px`,
+                                    padding: "0 2px"
+                                  }}
+                                  draggable
+                                  onDragStart={(event) => {
+                                    event.dataTransfer.effectAllowed = "copy";
+                                    event.dataTransfer.setData(
+                                      "application/x-measure",
+                                      JSON.stringify({ sampleId: sample.id, measureId: measure.id })
+                                    );
+                                  }}
+                                  onClick={(event) => {
+                                    event.stopPropagation();
+                                    onSelectSample(sample.id);
+                                  }}
+                                  onMouseEnter={(event) =>
+                                    showHoverCard(event.currentTarget, {
+                                      type: "measure",
+                                      sample,
+                                      measure
+                                    })
+                                  }
+                                  onMouseLeave={() =>
+                                    clearHoverCard(
+                                      (info) =>
+                                        info.type === "measure" &&
+                                        info.sample.id === sample.id &&
+                                        info.measure.id === measure.id
+                                    )
+                                  }
+                                >
+                                  <div
                                     style={{
                                       display: "flex",
-                                      justifyContent: "space-between",
                                       alignItems: "center",
-                                      padding: "8px 12px",
-                                      borderRadius: "10px",
-                                      border: `1px solid ${theme.border}`,
-                                      background: `${stem.color}1f`
-                                    }}
-                                    draggable
-                                    onDragStart={(event) => {
-                                      event.dataTransfer.effectAllowed = "copy";
-                                      event.dataTransfer.setData(
-                                        "application/x-stem-fragment",
-                                        JSON.stringify({
-                                          sampleId: sample.id,
-                                          stemId: stem.sourceStemId ?? stem.id,
-                                          start: measure.start,
-                                          end: measure.end
-                                        })
-                                      );
+                                      gap: "8px",
+                                      minWidth: 0
                                     }}
                                   >
+                                    <strong style={{ fontSize: "0.78rem", color: theme.text }}>
+                                      Measure {index + 1}
+                                    </strong>
                                     <span
                                       style={{
-                                        display: "flex",
-                                        flexDirection: "column",
-                                        gap: stem.extractionModel || stem.processingNotes ? "2px" : 0,
-                                        color: theme.text
+                                        fontSize: "0.7rem",
+                                        color: theme.textMuted,
+                                        whiteSpace: "nowrap"
                                       }}
                                     >
-                                      <span
-                                        style={{
-                                          display: "flex",
-                                          alignItems: "center",
-                                          gap: "8px"
-                                        }}
-                                      >
-                                        <span
-                                          style={{
-                                            width: "10px",
-                                            height: "10px",
-                                            borderRadius: "50%",
-                                            background: stem.color
-                                          }}
-                                        ></span>
-                                        {stem.name}
-                                      </span>
-                                      {(stem.extractionModel || stem.processingNotes) && (
-                                        <span style={{ fontSize: "0.68rem", color: theme.textMuted }}>
-                                          {stem.extractionModel}
-                                          {stem.processingNotes
-                                            ? stem.extractionModel
-                                              ? ` • ${stem.processingNotes}`
-                                              : stem.processingNotes
-                                            : ""}
-                                        </span>
-                                      )}
+                                      {measure.beatCount} beats
                                     </span>
+                                  </div>
+                                  <div style={{ display: "flex", alignItems: "center", gap: "8px" }}>
                                     <button
                                       type="button"
                                       onClick={(event) => {
                                         event.stopPropagation();
-                                        void playStem(sample, stem);
+                                        void playMeasure(sample, measure);
                                       }}
                                       style={{
                                         width: "28px",
                                         height: "28px",
                                         borderRadius: "50%",
                                         border: `1px solid ${theme.button.outline}`,
-                                        background: playingId === stem.id
-                                          ? theme.button.primary
-                                          : theme.button.base,
-                                        color: playingId === stem.id
-                                          ? theme.button.primaryText
-                                          : theme.text,
-                                        cursor: "pointer"
+                                        background:
+                                          playingId === measure.id
+                                            ? theme.button.primary
+                                            : theme.button.base,
+                                        color:
+                                          playingId === measure.id
+                                            ? theme.button.primaryText
+                                            : theme.text,
+                                        cursor: "pointer",
+                                        fontSize: "0.75rem"
                                       }}
                                     >
-                                      {playingId === stem.id ? "■" : "▶"}
+                                      {playingId === measure.id ? "■" : "▶"}
                                     </button>
-                                  </li>
-                                ))}
-                              </ul>
-                            </details>
-
-                            {measure.beats && measure.beats.length > 0 && (
-                              <div
-                                style={{ position: "relative" }}
-                                onMouseLeave={() => {
-                                  setHoveredBeat((previous) =>
-                                    previous && previous.measureId === measure.id && previous.sampleId === sample.id
-                                      ? null
-                                      : previous
-                                  );
-                                }}
-                              >
-                                <div
-                                  style={{
-                                    display: "flex",
-                                    flexWrap: "wrap",
-                                    gap: "8px",
-                                    padding: "6px 0"
-                                  }}
-                                >
-                                  {measure.beats.map((beat) => {
-                                    const isActive = hoveredBeatInMeasure?.beat.id === beat.id;
-                                    return (
-                                      <button
-                                        key={beat.id}
-                                        type="button"
-                                        onClick={(event) => {
-                                          event.stopPropagation();
-                                          void playBeat(sample, beat);
-                                        }}
-                                        onMouseEnter={() => {
-                                          setHoveredBeat({ sampleId: sample.id, measureId: measure.id, beat });
-                                        }}
-                                        style={{
-                                          borderRadius: "999px",
-                                          border: `1px solid ${isActive ? theme.button.primary : theme.border}`,
-                                          background: isActive ? `${theme.button.primary}24` : theme.surfaceOverlay,
-                                          color: theme.text,
-                                          fontSize: "0.72rem",
-                                          padding: "6px 12px",
-                                          display: "flex",
-                                          alignItems: "center",
-                                          gap: "8px",
-                                          cursor: "pointer",
-                                          boxShadow: isActive ? theme.cardGlow : "none"
-                                        }}
-                                        draggable
-                                        onDragStart={(event) => {
-                                          event.dataTransfer.effectAllowed = "copy";
-                                          event.dataTransfer.setData(
-                                            "application/x-beat",
-                                            JSON.stringify({
-                                              sampleId: sample.id,
-                                              measureId: measure.id,
-                                              beatId: beat.id
-                                            })
-                                          );
-                                        }}
-                                      >
-                                        <span style={{ fontWeight: 600 }}>B{beat.index + 1}</span>
-                                        <span style={{ color: theme.textMuted, fontSize: "0.7rem" }}>
-                                          {(beat.end - beat.start).toFixed(2)}s
-                                        </span>
-                                        <span style={{ color: theme.button.primary }}>
-                                          {playingId === beat.id ? "■" : "▶"}
-                                        </span>
-                                      </button>
-                                    );
-                                  })}
+                                  </div>
                                 </div>
-                                {hoveredBeatInMeasure && (
-                                    <div
-                                      style={{
-                                        position: "absolute",
-                                        top: 0,
-                                        left: "100%",
-                                        marginLeft: "16px",
-                                        padding: "14px 16px",
-                                        background: theme.surfaceOverlay,
-                                        border: `1px solid ${theme.button.outline}`,
-                                        borderRadius: "14px",
-                                        boxShadow: theme.shadow,
-                                        display: "flex",
-                                        flexDirection: "column",
-                                        gap: "10px",
-                                        minWidth: "240px",
-                                        zIndex: 10
-                                      }}
-                                      onMouseEnter={() => {
-                                        setHoveredBeat(hoveredBeatInMeasure);
-                                      }}
-                                      onMouseLeave={() => {
-                                        setHoveredBeat((previous) =>
-                                          previous &&
-                                          previous.measureId === measure.id &&
-                                          previous.sampleId === sample.id
-                                            ? null
-                                            : previous
-                                        );
-                                      }}
-                                    >
-                                      <div
-                                        style={{
-                                          display: "flex",
-                                          alignItems: "center",
-                                          justifyContent: "space-between",
-                                          gap: "8px"
-                                        }}
-                                      >
-                                        <div style={{ display: "flex", flexDirection: "column", gap: "4px" }}>
-                                          <strong style={{ fontSize: "0.8rem", color: theme.text }}>
-                                            Beat {hoveredBeatInMeasure.beat.index + 1}
-                                          </strong>
-                                          <span style={{ fontSize: "0.72rem", color: theme.textMuted }}>
-                                            {hoveredBeatInMeasure.beat.start.toFixed(2)}s →
-                                            {hoveredBeatInMeasure.beat.end.toFixed(2)}s ·
-                                            {(hoveredBeatInMeasure.beat.end - hoveredBeatInMeasure.beat.start).toFixed(2)}s
+                                {measureStems.length > 0 && (
+                                  <div
+                                    style={{
+                                      display: "flex",
+                                      gap: "6px",
+                                      overflowX: "auto",
+                                      padding: "0 2px 0 2px"
+                                    }}
+                                  >
+                                    {measureStems.map((stem) => {
+                                      const isHoveringStem =
+                                        hoverCard?.type === "stem" &&
+                                        hoverCard.sample.id === sample.id &&
+                                        hoverCard.stem.id === stem.id;
+                                      return (
+                                        <div
+                                          key={stem.id}
+                                          style={{
+                                            flex: "0 0 auto",
+                                            display: "flex",
+                                            alignItems: "center",
+                                            gap: "6px",
+                                            padding: "0 12px",
+                                            height: `${NAV_ITEM_HEIGHT - 8}px`,
+                                            borderRadius: "999px",
+                                            border: `1px solid ${
+                                              isHoveringStem ? theme.button.primary : theme.border
+                                            }`,
+                                            background: `${stem.color}24`,
+                                            boxShadow: isHoveringStem ? theme.cardGlow : "none"
+                                          }}
+                                          draggable
+                                          onDragStart={(event) => {
+                                            event.dataTransfer.effectAllowed = "copy";
+                                            event.dataTransfer.setData(
+                                              "application/x-stem-fragment",
+                                              JSON.stringify({
+                                                sampleId: sample.id,
+                                                stemId: stem.sourceStemId ?? stem.id,
+                                                start: measure.start,
+                                                end: measure.end
+                                              })
+                                            );
+                                          }}
+                                          onMouseEnter={(event) =>
+                                            showHoverCard(event.currentTarget, {
+                                              type: "stem",
+                                              sample,
+                                              stem,
+                                              measure
+                                            })
+                                          }
+                                          onMouseLeave={() =>
+                                            clearHoverCard(
+                                              (info) =>
+                                                info.type === "stem" &&
+                                                info.sample.id === sample.id &&
+                                                info.stem.id === stem.id
+                                            )
+                                          }
+                                        >
+                                          <span
+                                            style={{
+                                              width: "10px",
+                                              height: "10px",
+                                              borderRadius: "50%",
+                                              background: stem.color
+                                            }}
+                                          ></span>
+                                          <span
+                                            style={{
+                                              fontSize: "0.72rem",
+                                              color: theme.text,
+                                              whiteSpace: "nowrap"
+                                            }}
+                                          >
+                                            {stem.name}
                                           </span>
+                                          <button
+                                            type="button"
+                                            onClick={(event) => {
+                                              event.stopPropagation();
+                                              void playStem(sample, stem);
+                                            }}
+                                            style={{
+                                              width: "24px",
+                                              height: "24px",
+                                              borderRadius: "50%",
+                                              border: `1px solid ${theme.button.outline}`,
+                                              background:
+                                                playingId === stem.id
+                                                  ? theme.button.primary
+                                                  : theme.button.base,
+                                              color:
+                                                playingId === stem.id
+                                                  ? theme.button.primaryText
+                                                  : theme.text,
+                                              cursor: "pointer",
+                                              fontSize: "0.68rem"
+                                            }}
+                                          >
+                                            {playingId === stem.id ? "■" : "▶"}
+                                          </button>
                                         </div>
+                                      );
+                                    })}
+                                  </div>
+                                )}
+                                {measure.beats && measure.beats.length > 0 && (
+                                  <div
+                                    style={{
+                                      display: "flex",
+                                      gap: "6px",
+                                      overflowX: "auto",
+                                      padding: "0 2px 2px"
+                                    }}
+                                  >
+                                    {measure.beats.map((beat) => {
+                                      const isActive = hoveredBeatId === beat.id;
+                                      return (
                                         <button
+                                          key={beat.id}
                                           type="button"
                                           onClick={(event) => {
                                             event.stopPropagation();
-                                            void playBeat(sample, hoveredBeatInMeasure.beat);
+                                            void playBeat(sample, beat);
                                           }}
+                                          onMouseEnter={(event) =>
+                                            showHoverCard(event.currentTarget, {
+                                              type: "beat",
+                                              sample,
+                                              measure,
+                                              beat
+                                            })
+                                          }
+                                          onMouseLeave={() =>
+                                            clearHoverCard(
+                                              (info) =>
+                                                info.type === "beat" &&
+                                                info.sample.id === sample.id &&
+                                                info.beat.id === beat.id
+                                            )
+                                          }
                                           style={{
-                                            width: "30px",
-                                            height: "30px",
-                                            borderRadius: "50%",
-                                            border: `1px solid ${theme.button.outline}`,
-                                            background: playingId === hoveredBeatInMeasure.beat.id
-                                              ? theme.button.primary
-                                              : theme.button.base,
-                                            color: playingId === hoveredBeatInMeasure.beat.id
-                                              ? theme.button.primaryText
-                                              : theme.text,
-                                            cursor: "pointer"
+                                            flex: "0 0 auto",
+                                            display: "flex",
+                                            alignItems: "center",
+                                            gap: "6px",
+                                            height: `${NAV_ITEM_HEIGHT - 8}px`,
+                                            padding: "0 12px",
+                                            borderRadius: "999px",
+                                            border: `1px solid ${
+                                              isActive ? theme.button.primary : theme.border
+                                            }`,
+                                            background: isActive
+                                              ? `${theme.button.primary}24`
+                                              : theme.surfaceOverlay,
+                                            color: theme.text,
+                                            fontSize: "0.72rem",
+                                            cursor: "pointer",
+                                            boxShadow: isActive ? theme.cardGlow : "none"
+                                          }}
+                                          draggable
+                                          onDragStart={(event) => {
+                                            event.dataTransfer.effectAllowed = "copy";
+                                            event.dataTransfer.setData(
+                                              "application/x-beat",
+                                              JSON.stringify({
+                                                sampleId: sample.id,
+                                                measureId: measure.id,
+                                                beatId: beat.id
+                                              })
+                                            );
                                           }}
                                         >
-                                          {playingId === hoveredBeatInMeasure.beat.id ? "■" : "▶"}
+                                          <span style={{ fontWeight: 600 }}>B{beat.index + 1}</span>
+                                          <span style={{ color: theme.textMuted }}>
+                                            {(beat.end - beat.start).toFixed(2)}s
+                                          </span>
+                                          <span style={{ color: theme.button.primary }}>
+                                            {playingId === beat.id ? "■" : "▶"}
+                                          </span>
                                         </button>
-                                      </div>
-                                      <ul
-                                        style={{
-                                          listStyle: "none",
-                                          margin: 0,
-                                          padding: 0,
-                                          display: "flex",
-                                          flexDirection: "column",
-                                          gap: "8px"
-                                        }}
-                                      >
-                                        {hoveredBeatInMeasure.beat.stems.map((stem) => (
-                                          <li
-                                            key={stem.id}
-                                            style={{
-                                              display: "flex",
-                                              justifyContent: "space-between",
-                                              alignItems: "center",
-                                              padding: "8px 12px",
-                                              borderRadius: "10px",
-                                              border: `1px solid ${theme.border}`,
-                                              background: `${stem.color}24`
-                                            }}
-                                            draggable
-                                            onDragStart={(event) => {
-                                              event.dataTransfer.effectAllowed = "copy";
-                                              event.dataTransfer.setData(
-                                                "application/x-stem-fragment",
-                                                JSON.stringify({
-                                                  sampleId: sample.id,
-                                                  stemId: stem.sourceStemId ?? stem.id,
-                                                  start: hoveredBeatInMeasure.beat.start,
-                                                  end: hoveredBeatInMeasure.beat.end
-                                                })
-                                              );
-                                            }}
-                                          >
-                                            <span
-                                              style={{
-                                                display: "flex",
-                                                flexDirection: "column",
-                                                gap: stem.extractionModel || stem.processingNotes ? "2px" : 0,
-                                                color: theme.text
-                                              }}
-                                            >
-                                              <span
-                                                style={{
-                                                  display: "flex",
-                                                  alignItems: "center",
-                                                  gap: "8px"
-                                                }}
-                                              >
-                                                <span
-                                                  style={{
-                                                    width: "10px",
-                                                    height: "10px",
-                                                    borderRadius: "50%",
-                                                    background: stem.color
-                                                  }}
-                                                ></span>
-                                                {stem.name}
-                                              </span>
-                                              {(stem.extractionModel || stem.processingNotes) && (
-                                                <span style={{ fontSize: "0.68rem", color: theme.textMuted }}>
-                                                  {stem.extractionModel}
-                                                  {stem.processingNotes
-                                                    ? stem.extractionModel
-                                                      ? ` • ${stem.processingNotes}`
-                                                      : stem.processingNotes
-                                                    : ""}
-                                                </span>
-                                              )}
-                                            </span>
-                                            <button
-                                              type="button"
-                                              onClick={(event) => {
-                                                event.stopPropagation();
-                                                void playStem(sample, stem);
-                                              }}
-                                              style={{
-                                                width: "28px",
-                                                height: "28px",
-                                                borderRadius: "50%",
-                                                border: `1px solid ${theme.button.outline}`,
-                                                background: playingId === stem.id
-                                                  ? theme.button.primary
-                                                  : theme.button.base,
-                                                color: playingId === stem.id
-                                                  ? theme.button.primaryText
-                                                  : theme.text,
-                                                cursor: "pointer"
-                                              }}
-                                            >
-                                              {playingId === stem.id ? "■" : "▶"}
-                                            </button>
-                                          </li>
-                                        ))}
-                                      </ul>
-                                    </div>
-                                  )}
-                              </div>
-                            )}
-                          </li>
-                        );
-                      })}
-                    </ul>
+                                      );
+                                    })}
+                                  </div>
+                                )}
+                              </li>
+                            );
+                          })}
+                        </ul>
+                      )}
+                    </div>
                   </details>
                 </div>
               )}
@@ -1163,6 +1196,222 @@ export function ProjectNavigator({ selectedSampleId, onSelectSample }: ProjectNa
           );
         })}
       </div>
+
+      {hoverCard && typeof window !== "undefined" && (() => {
+        const cardWidth = 280;
+        const estimatedHeight =
+          hoverCard.type === "sample"
+            ? 220
+            : hoverCard.type === "measure"
+            ? 210
+            : 190;
+        const scrollX = window.scrollX ?? 0;
+        const scrollY = window.scrollY ?? 0;
+        let top = hoverCard.rect.top + scrollY;
+        let left = hoverCard.rect.right + scrollX + 16;
+        if (left + cardWidth > scrollX + window.innerWidth - 16) {
+          left = Math.max(16 + scrollX, hoverCard.rect.left + scrollX - cardWidth - 16);
+        }
+        const maxTop = scrollY + window.innerHeight - estimatedHeight - 16;
+        top = Math.max(16 + scrollY, Math.min(top, maxTop));
+        const accent =
+          hoverCard.type === "stem"
+            ? hoverCard.stem.color
+            : hoverCard.type === "beat"
+            ? theme.button.primary
+            : theme.button.outline;
+        const gridStyle = {
+          display: "grid",
+          gridTemplateColumns: "auto 1fr",
+          gap: "4px 12px",
+          margin: "8px 0 0",
+          fontSize: "0.72rem"
+        };
+        const labelStyle = { color: theme.textMuted, margin: 0 };
+        const valueStyle = { margin: 0, color: theme.text };
+
+        const content = (() => {
+          switch (hoverCard.type) {
+            case "sample": {
+              const { sample } = hoverCard;
+              const channel = sample.channelId
+                ? project.channels.find((channelItem) => channelItem.id === sample.channelId)
+                : undefined;
+              const clipLength = sample.duration ?? sample.length;
+              const waveformStatus =
+                sample.waveform && sample.waveform.length > 0 ? "Ready" : "Analyzing";
+              return (
+                <>
+                  <strong style={{ fontSize: "0.8rem", display: "block", color: theme.text }}>
+                    {sample.name}
+                  </strong>
+                  {sample.variantLabel && (
+                    <span style={{ fontSize: "0.7rem", color: theme.textMuted }}>
+                      {sample.variantLabel}
+                    </span>
+                  )}
+                  <dl style={gridStyle}>
+                    <dt style={labelStyle}>Length</dt>
+                    <dd style={valueStyle}>{formatSeconds(clipLength)}</dd>
+                    <dt style={labelStyle}>Measures</dt>
+                    <dd style={valueStyle}>{sample.measures.length}</dd>
+                    <dt style={labelStyle}>BPM</dt>
+                    <dd style={valueStyle}>{sample.bpm ?? "—"}</dd>
+                    <dt style={labelStyle}>Key</dt>
+                    <dd style={valueStyle}>{sample.key ?? "—"}</dd>
+                    <dt style={labelStyle}>Looping</dt>
+                    <dd style={valueStyle}>{sample.isLooping ? "Enabled" : "Off"}</dd>
+                    <dt style={labelStyle}>Channel</dt>
+                    <dd style={valueStyle}>{channel ? channel.name : "Unassigned"}</dd>
+                    <dt style={labelStyle}>Waveform</dt>
+                    <dd style={valueStyle}>{waveformStatus}</dd>
+                  </dl>
+                </>
+              );
+            }
+            case "stem": {
+              const { stem, sample, measure } = hoverCard;
+              const duration = stem.duration ?? sample.duration ?? sample.length;
+              const sourceStem = stem.sourceStemId
+                ? sample.stems.find((item) => item.id === stem.sourceStemId)
+                : undefined;
+              const measureIndex = measure
+                ? sample.measures.findIndex((item) => item.id === measure.id)
+                : -1;
+              return (
+                <>
+                  <strong style={{ fontSize: "0.8rem", display: "block", color: theme.text }}>
+                    {stem.name}
+                  </strong>
+                  <dl style={gridStyle}>
+                    <dt style={labelStyle}>Type</dt>
+                    <dd style={valueStyle}>{stem.type}</dd>
+                    <dt style={labelStyle}>Duration</dt>
+                    <dd style={valueStyle}>{formatSeconds(duration)}</dd>
+                    <dt style={labelStyle}>Start</dt>
+                    <dd style={valueStyle}>{formatSeconds(stem.startOffset)}</dd>
+                    <dt style={labelStyle}>BPM</dt>
+                    <dd style={valueStyle}>{stem.bpm ?? sample.bpm ?? "—"}</dd>
+                    <dt style={labelStyle}>Key</dt>
+                    <dd style={valueStyle}>{stem.key ?? sample.key ?? "—"}</dd>
+                    {measure && (
+                      <>
+                        <dt style={labelStyle}>Measure</dt>
+                        <dd style={valueStyle}>
+                          {measureIndex >= 0 ? `Measure ${measureIndex + 1}` : "—"}
+                        </dd>
+                      </>
+                    )}
+                    {stem.extractionModel && (
+                      <>
+                        <dt style={labelStyle}>Model</dt>
+                        <dd style={valueStyle}>{stem.extractionModel}</dd>
+                      </>
+                    )}
+                    {stem.processingNotes && (
+                      <>
+                        <dt style={labelStyle}>Notes</dt>
+                        <dd style={valueStyle}>{stem.processingNotes}</dd>
+                      </>
+                    )}
+                    {sourceStem && (
+                      <>
+                        <dt style={labelStyle}>Source</dt>
+                        <dd style={valueStyle}>{sourceStem.name}</dd>
+                      </>
+                    )}
+                  </dl>
+                </>
+              );
+            }
+            case "measure": {
+              const { measure, sample } = hoverCard;
+              const index = sample.measures.findIndex((item) => item.id === measure.id);
+              const tunedPitch = measure.tunedPitch ?? measure.detectedPitch ?? "—";
+              const pitchLabel =
+                measure.tunedPitch &&
+                measure.detectedPitch &&
+                measure.tunedPitch !== measure.detectedPitch
+                  ? `${measure.detectedPitch} → ${measure.tunedPitch}`
+                  : tunedPitch;
+              return (
+                <>
+                  <strong style={{ fontSize: "0.8rem", display: "block", color: theme.text }}>
+                    Measure {index >= 0 ? index + 1 : ""}
+                  </strong>
+                  <dl style={gridStyle}>
+                    <dt style={labelStyle}>Start</dt>
+                    <dd style={valueStyle}>{formatSeconds(measure.start)}</dd>
+                    <dt style={labelStyle}>End</dt>
+                    <dd style={valueStyle}>{formatSeconds(measure.end)}</dd>
+                    <dt style={labelStyle}>Duration</dt>
+                    <dd style={valueStyle}>{formatSeconds(getMeasureDuration(measure))}</dd>
+                    <dt style={labelStyle}>Beats</dt>
+                    <dd style={valueStyle}>{measure.beatCount}</dd>
+                    <dt style={labelStyle}>Pitch</dt>
+                    <dd style={valueStyle}>{pitchLabel}</dd>
+                    <dt style={labelStyle}>Energy</dt>
+                    <dd style={valueStyle}>
+                      {measure.energy !== undefined ? `${Math.round(measure.energy * 100)}%` : "—"}
+                    </dd>
+                  </dl>
+                </>
+              );
+            }
+            case "beat": {
+              const { beat } = hoverCard;
+              return (
+                <>
+                  <strong style={{ fontSize: "0.8rem", display: "block", color: theme.text }}>
+                    Beat {beat.index + 1}
+                  </strong>
+                  <dl style={gridStyle}>
+                    <dt style={labelStyle}>Start</dt>
+                    <dd style={valueStyle}>{formatSeconds(beat.start)}</dd>
+                    <dt style={labelStyle}>End</dt>
+                    <dd style={valueStyle}>{formatSeconds(beat.end)}</dd>
+                    <dt style={labelStyle}>Duration</dt>
+                    <dd style={valueStyle}>{formatSeconds(beat.end - beat.start)}</dd>
+                    <dt style={labelStyle}>Fragments</dt>
+                    <dd style={valueStyle}>
+                      {beat.stems.length > 0
+                        ? beat.stems.map((item) => item.name).join(", ")
+                        : "—"}
+                    </dd>
+                  </dl>
+                </>
+              );
+            }
+            default:
+              return null;
+          }
+        })();
+
+        if (!content) {
+          return null;
+        }
+
+        return (
+          <div
+            style={{
+              position: "fixed",
+              top: `${top}px`,
+              left: `${left}px`,
+              width: `${cardWidth}px`,
+              background: theme.surfaceOverlay,
+              border: `1px solid ${accent}`,
+              borderRadius: "14px",
+              padding: "14px 16px",
+              boxShadow: theme.shadow,
+              color: theme.text,
+              zIndex: 40,
+              pointerEvents: "none"
+            }}
+          >
+            {content}
+          </div>
+        );
+      })()}
 
       {contextMenu && (
         <div
