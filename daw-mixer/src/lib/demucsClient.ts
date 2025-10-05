@@ -1,5 +1,13 @@
 import { nanoid } from "nanoid";
 import type { Measure, SampleClip, StemInfo } from "../types";
+import {
+  DEFAULT_ENGINE_ID,
+  DEFAULT_HEURISTICS,
+  applyEngineToStem,
+  cloneHeuristics,
+  getStemEngineDefinition,
+  type StemProcessingOptions,
+} from "../stem_engines";
 
 export const CAMEL0T_KEYS = [
   "1A",
@@ -83,11 +91,20 @@ const STEM_TYPES: Array<{
   { type: "bass", label: "Bassline", color: "#4c6edb" }
 ];
 
-export async function runDemucs(file: File | undefined): Promise<DemucsResult> {
+export async function runDemucs(
+  file: File | undefined,
+  options?: StemProcessingOptions,
+): Promise<DemucsResult> {
   if (!file) {
     throw new Error("DEMUCs requires a file input");
   }
   await new Promise((resolve) => setTimeout(resolve, 1200));
+
+  const engineId = options?.engine ?? DEFAULT_ENGINE_ID;
+  const heuristics = options?.heuristics
+    ? cloneHeuristics(options.heuristics)
+    : cloneHeuristics(DEFAULT_HEURISTICS);
+  const engine = getStemEngineDefinition(engineId);
 
   const totalDuration = Math.max(file.size / 44100 / 2, 8);
   const bpm = Math.max(60, Math.min(160, Math.round((file.size % 80000) / 800 + 90)));
@@ -108,16 +125,19 @@ export async function runDemucs(file: File | undefined): Promise<DemucsResult> {
     };
   });
 
-  const stems: StemInfo[] = STEM_TYPES.map((stem) => ({
-    id: nanoid(),
-    name: stem.label,
-    type: stem.type,
-    color: stem.color,
-    startOffset: 0,
-    duration: measureDuration * measureCount,
-    extractionModel: stem.model,
-    processingNotes: stem.notes
-  }));
+  const stems: StemInfo[] = STEM_TYPES.map((stem) => {
+    const base: StemInfo = {
+      id: nanoid(),
+      name: stem.label,
+      type: stem.type,
+      color: stem.color,
+      startOffset: 0,
+      duration: measureDuration * measureCount,
+      extractionModel: stem.model,
+      processingNotes: stem.notes,
+    };
+    return applyEngineToStem(base, engine, heuristics);
+  });
 
   return {
     stems,
