@@ -131,6 +131,30 @@ export class AudioEngine {
     this.startWatch();
   }
 
+  async triggerOneShot(
+    target: PlaybackTarget,
+    semitoneOffset = 0,
+    options: { duration?: number } = {}
+  ) {
+    await this.context.resume();
+    const buffer = await this.decodeSample(target);
+    if (!buffer) return;
+
+    const source = this.context.createBufferSource();
+    source.buffer = buffer;
+    this.connectThroughChain(source, []);
+    const playbackRate = 2 ** (semitoneOffset / 12);
+    source.playbackRate.value = Number.isFinite(playbackRate) ? playbackRate : 1;
+
+    const { startOffset, duration } = getPlaybackOffsets(target);
+    const start = startOffset ?? 0;
+    const playDuration = options.duration ?? duration ?? buffer.duration - start;
+    source.start(0, start, playDuration);
+    source.onended = () => {
+      source.disconnect();
+    };
+  }
+
   async playSegment(
     target: PlaybackTarget,
     segmentStart: number,

@@ -29,6 +29,7 @@ export type ProjectAction =
         | Partial<AutomationChannel>
         | Partial<MidiChannel>;
     }
+  | { type: "set-scale"; projectId: string; scale: string }
   | { type: "register-control-change"; target: AutomationTarget | null };
 
 export interface AutomationTarget {
@@ -194,10 +195,13 @@ function reducer(state: ProjectState, action: ProjectAction): ProjectState {
           pan: action.channel.pan ?? 0
         };
       } else {
+        const midiChannel = action.channel as MidiChannel;
         normalizedChannel = {
-          ...action.channel,
-          volume: action.channel.volume ?? 0.85,
-          pan: action.channel.pan ?? 0
+          ...midiChannel,
+          blocks: midiChannel.blocks ?? [],
+          blockSizeMeasures: midiChannel.blockSizeMeasures ?? 1,
+          volume: midiChannel.volume ?? 0.85,
+          pan: midiChannel.pan ?? 0
         };
       }
       return {
@@ -207,6 +211,21 @@ function reducer(state: ProjectState, action: ProjectAction): ProjectState {
           [project.id]: {
             ...project,
             channels: [...project.channels, normalizedChannel]
+          }
+        },
+        lastControlTarget: state.lastControlTarget
+      };
+    }
+    case "set-scale": {
+      const project = state.projects[action.projectId];
+      if (!project) return state;
+      return {
+        ...state,
+        projects: {
+          ...state.projects,
+          [project.id]: {
+            ...project,
+            scale: action.scale
           }
         },
         lastControlTarget: state.lastControlTarget
