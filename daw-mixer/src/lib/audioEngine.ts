@@ -328,6 +328,7 @@ export class AudioEngine {
 
     const bucketCount = Math.max(1, Math.min(resolution, endFrame - startFrame));
     const peaks = new Float32Array(bucketCount);
+    let overallMax = 0;
     const framesPerBucket = (endFrame - startFrame) / bucketCount;
 
     for (let bucket = 0; bucket < bucketCount; bucket += 1) {
@@ -346,6 +347,15 @@ export class AudioEngine {
         }
       }
       peaks[bucket] = max;
+      if (max > overallMax) {
+        overallMax = max;
+      }
+    }
+
+    if (overallMax > 0) {
+      for (let bucket = 0; bucket < peaks.length; bucket += 1) {
+        peaks[bucket] = Math.min(1, peaks[bucket] / overallMax);
+      }
     }
 
     return peaks;
