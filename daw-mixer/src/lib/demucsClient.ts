@@ -91,14 +91,50 @@ const STEM_TYPES: Array<{
   { type: "bass", label: "Bassline", color: "#4c6edb" }
 ];
 
+async function runServerSeparation(file: File): Promise<DemucsResult | null> {
+  const base = import.meta.env.VITE_BACKEND_URL ?? "http://127.0.0.1:8001";
+  try {
+    const form = new FormData();
+    form.append("file", file);
+    const res = await fetch(`${base}/api/separate`, {
+      method: "POST",
+      body: form,
+    });
+    if (!res.ok) return null;
+    const data = (await res.json()) as {
+      stems: Array<StemInfo & { url?: string }>;
+      measures: Measure[];
+      bpm: number;
+      key: string;
+    };
+    // Normalize stem URLs to absolute
+    const stems = data.stems.map((s) => ({
+      ...s,
+      url: s.url && s.url.startsWith("http") ? s.url : `${base}${s.url ?? ""}`,
+    }));
+    return { stems, measures: data.measures, bpm: data.bpm, key: data.key };
+  } catch (err) {
+    console.warn("Server separation failed", err);
+    return null;
+  }
+}
+
 export async function runDemucs(
   file: File | undefined,
   options?: StemProcessingOptions,
 ): Promise<DemucsResult> {
   if (!file) {
-    throw new Error("DEMUCs requires a file input");
+    throw new Error("Separation requires a file input");
   }
-  await new Promise((resolve) => setTimeout(resolve, 1200));
+
+  // Try backend server first
+  const server = await runServerSeparation(file);
+  if (server) {
+    return server;
+  }
+
+  // Fallback to previous mock pipeline (preserve UX if backend missing)
+  console.warn("Falling back to mock separation (backend not available)");
 
   const engineId = options?.engine ?? DEFAULT_ENGINE_ID;
   const heuristics = options?.heuristics
@@ -121,7 +157,7 @@ export async function runDemucs(
       isDownbeat: true,
       detectedPitch,
       tunedPitch: detectedPitch,
-      energy: Math.round(((index + 1) / measureCount) * 100) / 100
+      energy: Math.round(((index + 1) / measureCount) * 100) / 100,
     };
   });
 
@@ -143,7 +179,7 @@ export async function runDemucs(
     stems,
     measures,
     bpm,
-    key: CAMEL0T_KEYS[file.size % CAMEL0T_KEYS.length]
+    key: CAMEL0T_KEYS[file.size % CAMEL0T_KEYS.length],
   };
 }
 

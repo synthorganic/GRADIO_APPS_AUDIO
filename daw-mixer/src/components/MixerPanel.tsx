@@ -1,4 +1,4 @@
-import { useMemo } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import type { Project } from "../types";
 import { useProjectStore } from "../state/ProjectStore";
 import { audioEngine } from "../lib/audioEngine";
@@ -12,6 +12,22 @@ interface MixerPanelProps {
 export function MixerPanel({ project }: MixerPanelProps) {
   const { currentProjectId, dispatch } = useProjectStore();
   const channels = useMemo(() => project.channels, [project.channels]);
+  const [levels, setLevels] = useState<Record<string, { rms: number; peak: number }>>({});
+  const rafRef = useRef<number | null>(null);
+
+  useEffect(() => {
+    const loop = () => {
+      const map = audioEngine.getChannelLevels();
+      const next: Record<string, { rms: number; peak: number }> = {};
+      map.forEach((v, k) => { next[k] = v; });
+      setLevels(next);
+      rafRef.current = requestAnimationFrame(loop);
+    };
+    rafRef.current = requestAnimationFrame(loop);
+    return () => { if (rafRef.current) cancelAnimationFrame(rafRef.current); };
+  }, []);
+
+  const toDb = (rms: number) => (rms > 0 ? 20 * Math.log10(rms) : -120);
 
   return (
     <div
@@ -60,6 +76,21 @@ export function MixerPanel({ project }: MixerPanelProps) {
               <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
                 <strong style={{ fontSize: "0.8rem" }}>{channel.name}</strong>
                 <span style={{ fontSize: "0.65rem", color: theme.textMuted }}>{channel.type.toUpperCase()}</span>
+              </div>
+              <div style={{ display: "grid", gridTemplateColumns: "1fr auto", alignItems: "center", gap: "8px" }}>
+                <div style={{ height: "6px", background: theme.surface, borderRadius: "999px", overflow: "hidden", border: `1px solid ${theme.button.outline}` }}>
+                  {(() => {
+                    const l = levels[channel.id];
+                    const db = toDb(l?.rms ?? 0);
+                    const pct = Math.max(0, Math.min(100, ((db + 60) / 60) * 100));
+                    return (
+                      <div style={{ height: "100%", width: `${pct}%`, background: theme.button.primary, transition: "width 0.1s linear" }} />
+                    );
+                  })()}
+                </div>
+                <span style={{ fontSize: "0.65rem", color: theme.textMuted }}>
+                  {toDb(levels[channel.id]?.rms ?? 0).toFixed(1)} dB
+                </span>
               </div>
               <label style={{ display: "flex", flexDirection: "column", gap: "4px", fontSize: "0.7rem" }}>
                 Volume

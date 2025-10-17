@@ -11,6 +11,7 @@ export function TransportControls({ project }: TransportControlsProps) {
   const [volume, setVolume] = useState(0.9);
   const [isPlaying, setIsPlaying] = useState(false);
   const [isRendering, setIsRendering] = useState(false);
+  const [masterDb, setMasterDb] = useState(-120);
 
   useEffect(() => {
     const handlePlay = () => setIsPlaying(true);
@@ -21,6 +22,18 @@ export function TransportControls({ project }: TransportControlsProps) {
       window.removeEventListener("audio-play", handlePlay);
       window.removeEventListener("audio-stop", handleStop);
     };
+  }, []);
+
+  useEffect(() => {
+    let raf: number | null = null;
+    const tick = () => {
+      const { rms } = audioEngine.getMasterLevels();
+      const db = rms > 0 ? 20 * Math.log10(rms) : -120;
+      setMasterDb(db);
+      raf = requestAnimationFrame(tick);
+    };
+    raf = requestAnimationFrame(tick);
+    return () => { if (raf) cancelAnimationFrame(raf); };
   }, []);
 
   return (
@@ -74,18 +87,25 @@ export function TransportControls({ project }: TransportControlsProps) {
         <button
           type="button"
           disabled={isRendering}
-          onClick={() => {
-            setIsRendering(true);
-            setTimeout(() => {
-              const audioData = new Blob(["mixdown"], { type: "audio/wav" });
-              const url = URL.createObjectURL(audioData);
+          onClick={async () => {
+            try {
+              setIsRendering(true);
+              const clips = project.samples.filter((s) => s.isInTimeline !== false);
+              const blob = await audioEngine.renderTimelineMix(
+                clips,
+                project.mastering,
+                project.channels,
+                { sampleRate: 48000 },
+              );
+              const url = URL.createObjectURL(blob);
               const anchor = document.createElement("a");
               anchor.href = url;
               anchor.download = `${project.name.replace(/\s+/g, "-")}-mixdown.wav`;
               anchor.click();
               URL.revokeObjectURL(url);
+            } finally {
               setIsRendering(false);
-            }, 1200);
+            }
           }}
           style={{
             ...buttonStyle,
@@ -99,7 +119,17 @@ export function TransportControls({ project }: TransportControlsProps) {
           {isRendering ? "Rendering…" : "Render mixdown"}
         </button>
       </div>
-      <div style={{ display: "flex", alignItems: "center", gap: "8px" }}>
+      <div style={{ display: "flex", alignItems: "center", gap: "12px" }}>
+        <div style={{ display: "flex", alignItems: "center", gap: "6px" }}>
+          <span style={{ fontSize: "0.85rem", color: theme.textMuted }}>Master</span>
+          <div style={{ width: "120px", height: "6px", borderRadius: "999px", overflow: "hidden", background: theme.surface, border: `1px solid ${theme.button.outline}` }}>
+            {(() => {
+              const pct = Math.max(0, Math.min(100, ((masterDb + 60) / 60) * 100));
+              return <div style={{ height: "100%", width: `${pct}%`, background: theme.button.primary, transition: "width 0.1s linear" }} />;
+            })()}
+          </div>
+          <span style={{ fontSize: "0.8rem", color: theme.textMuted }}>{masterDb.toFixed(1)} dB</span>
+        </div>
         <span style={{ fontSize: "0.85rem", color: theme.textMuted }}>Volume</span>
         <input
           type="range"

@@ -1,0 +1,286 @@
+🎛️ Core DAW Functionality Checklist
+✅ Audio Engine & Playback
+
+ Web Audio API engine for sample playback, looping, time-stretching, and gain envelopes.
+
+ Offline rendering / bounce to WAV.
+
+ Realtime latency compensation + resampling.
+
+ “Clip stem group” management (auto-tag stems: vocals, drums, bass, FX).
+Heard. Let’s make bleed cry uncle. Below is a laser-focused, browser-first plan to get **clean, production-grade stem separation**—no fluff, just spectral hygiene and measurable wins.
+
+# North Star
+
+**Goal:** 4–5 stem parity (vocals, drums, bass, other, [optional] guitar/piano) with **low bleed**, **phase-coherent re-sum**, and **tunables** for “speed vs quality.”
+
+---
+
+# Tier 0: Immediate Quality Wins (no new model required)
+
+These are fast surgical fixes that usually halve audible artifacts.
+
+1. **Mixture Consistency Projection**
+   After separation, force stems to sum back to the input:
+   `for each time-freq bin: X_mix = Σ_i X_hat_i → scale each stem so Σ_i X'_i = X_mix`
+   👉 Audible result: fewer “holes” and metallic phasing; better glue between stems.
+
+2. **Smart Overlap-Add Windows**
+   Do separation in chunks (e.g., 10–30 s) with **Hann** crossfades and ≥50% overlap; apply **lookahead** to avoid boundary zippering.
+   👉 Eliminates “barline hiccups.”
+
+3. **HPSS Preconditioning (cheap, huge ROI)**
+
+* Run **Harmonic–Percussive Source Separation** on the mix.
+* Send **Percussive** bias to drums path, **Harmonic** bias to vocals/bass/other.
+  👉 The model/post-filters have less to “undo,” bleeding drops.
+
+4. **Targeted Post-Filters per Stem**
+
+* Vocals: HPF 90–120 Hz, gentle de-ess, light gate keyed by syllable energy.
+* Drums: transient-preserving limiter + tiny spectral median filter to shave tonal bleed.
+* Bass: LPF 8–12 kHz, slow release comp to kill cymbal spill.
+  👉 “Sounds like two dBs of free competence.”
+
+5. **Residual Listening + A/B Tools**
+   Expose a **Residual** bus (mix − sum(stems)). If residual is musical, you’ve got bleed; drive the post-filters until residual turns to noise.
+   👉 Tight loop for tuning, reduces subjective guesswork.
+
+---
+
+# Tier 1: Model Path (Browser-First, Cloud Fallback)
+
+## A) In-Browser (preferred on modern machines)
+
+* **Runtime:** ONNX Runtime Web with **WebGPU** backend (falls back to WebGL/wasm).
+* **Models:** lightweight **MDX-Net/“UVR-style”** or **Demucs-small** converted to ONNX (fp16 or 8-bit).
+* **Chunking:** 44.1 kHz mono/stereo, 20 s windows, 75% overlap; optional multi-pass refinement (see below).
+* **Workers:** Run all DSP + inference in a **Web Worker** to keep UI 60fps.
+
+### Multi-Pass Refinement (optional but killer)
+
+1. Pass 1: vocal vs instrumental (binary mask).
+2. Pass 2: split instrumental → drums/bass/other.
+3. **Constraint Pass:** mixture consistency + **Wiener recon** to re-balance masks.
+   Yields cleaner vocals and tighter drums than single-shot 4-stem.
+
+## B) Cloud Microservice (only when WebGPU is missing)
+
+* Same ONNX graph server-side.
+* Stream stems back as chunked PCM → enables **progressive audition** while processing.
+* Keep the UI identical; detect capability and route accordingly.
+
+---
+
+# Tier 2: Artifact Kill-Switches (UX you’ll feel)
+
+* **“Bleed Control” knob:** increases post-mask aggressiveness + median smoothing; caps with mixture consistency so the mix still recombines perfectly.
+* **“Quality vs Speed” slider:** tunes overlap, FFT size, and model (S / M / L).
+* **“Phase-Lock” toggle:** enforces consistent phase between stems (prevents flanging on re-sum).
+* **“Focus Bands” UI:** per-stem band emphasis (e.g., boost 2–5 kHz for vocal extraction mask only).
+* **“Re-Mask to Groove”**: align mask on beat grid to avoid smearing transients across clips.
+
+---
+
+# Engineering Blueprint (browser)
+
+**New modules/services**
+
+* `separation-worker.ts` (Web Worker)
+
+  * Decode → normalize → HPSS → chunk → model → post-filters → mixture consistency → encode.
+* `onnxEngine.ts`
+
+  * ORT Web init, backend selection (WebGPU/WebGL/wasm), model load, inference.
+* `maskOps.ts`
+
+  * STFT/ISTFT helpers, Wiener filter, mixture-consistency projector, median smoothers.
+* `qualityProfiles.ts`
+
+  * Presets: *Draft*, *Studio*, *Mastering* (sets FFT/window/overlap/model size).
+* `StemLabPanel.tsx`
+
+  * Residual bus meter, A/B toggle, per-stem artifact tools, “Bleed Control,” “Phase-Lock.”
+
+**Processing pipeline (per chunk)**
+
+1. PCM → **STFT**
+2. **HPSS bias** (guide masks, not destructive)
+3. **Model** → soft masks per target
+4. **Wiener refinement** (optional, low-iter)
+5. **Mixture consistency projection**
+6. Per-stem **post-filters** (vocals/drums/bass/other)
+7. **ISTFT** → Overlap-Add → stream to output buses
+
+**Performance tactics**
+
+* Pre-warm ONNX + allocate tensors once.
+* Use **planar Float32** buffers; avoid re-interleaving.
+* Run **2 worker lanes** max to keep GPU happy; queue per-track.
+* Cache processed chunks (content hash) for instant scrubbing.
+
+---
+
+# Acceptance Criteria (objective, not vibes)
+
+* **SI-SDR** on MUSDB18-HQ (or your “golden” set) improves ≥ **+2 dB** for vocals and drums vs current.
+* **Residual RMS** < **−25 dBFS** on full-mix average (post-projection).
+* **Re-sum Null Test:** mix − sum(stems) ≈ silence (≤ −60 dBFS noise floor).
+* **Perceived Win:** blind A/B with five clips → ≥ 4/5 listeners prefer new pipeline.
+
+---
+
+# UI Spec: “Stem Lab” (what you’ll ship)
+
+* Per stem: **Bleed Control**, **Phase-Lock**, **Focus Bands (3)**, **Gate**, **HPF/LPF**.
+* Global: **Quality vs Speed**, **Residual Listen**, **Re-Sum Check** indicator, **Export Stems**.
+* Presets: *Podcast Vocal Boost*, *EDM Drums First*, *Band Practice Cleanup*.
+
+---
+
+# Prioritized Backlog (do this in order)
+
+1. Implement **Mixture Consistency** + **Overlap-Add** (Tier 0).
+2. Add **HPSS Preconditioning** and **post-filters** (Tier 0).
+3. Stand up **separation-worker** and **onnxEngine** with **ORT Web** (Tier 1A).
+4. Wire **Residual bus** and **Stem Lab UI** (Tier 2).
+5. Add **Quality Profiles** and the **Phase-Lock** toggle.
+6. Optional **Multi-Pass Refinement** (vocals→instrumental, then split).
+7. Cloud fallback if needed.
+
+---
+
+# Package adds (one-liners)
+
+* `onnxruntime-web` (WebGPU backend)
+* `ml-fft` or custom FFT (if you don’t already have one)
+* `meyda` (optional) for HPSS scaffolding, or implement lightweight HPSS in-house
+
+---
+
+# Why this works (TL;DR)
+
+* **Mixture consistency + Wiener** fix the biggest psychoacoustic sins quickly.
+* **HPSS** reduces the problem difficulty before the model even runs.
+* **Phase-aware overlap** prevents the “underwater chorus” at chunk edges.
+* **Bleed Control** makes the compromises explicit and user-tunable.
+* **Residual listening** turns quality into a dial you can hear and measure.
+
+If you want, I’ll drop a **ready-to-paste `separation-worker.ts` skeleton** and the **`StemLabPanel.tsx`** with the exact knobs above (flagging *NEW* vs *ALTERED* headers per your convention) — just say “ship the worker + panel.”
+
+
+✅ Track & Timeline
+
+ Zoomable / scrollable timeline (canvas or SVG-based).
+
+ Clip objects with drag-resize, split/join, color tagging.
+
+ Snapping / grid divisions (1/4 → 1/64 notes, triplets, free).
+
+ Automation lanes (gain, pan, filter cutoff).
+
+ Multi-track grouping and fold/unfold.
+
+✅ Visual Layer
+
+ Waveform rendering via AudioBuffer → canvas.
+
+ Spectrogram / RMS visualizer (optional GPU shader).
+
+ Clip color coding ↔ semantic label (“warm pad”, “crisp kick”).
+
+ Framer-motion transitions for clip creation/deletion animations (already supported via framer-motion deps
+
+package-lock
+
+).
+
+🧠 Generative / AI Integration
+🎤 Verbal-to-Clip Creation
+
+ Natural-language prompt → generate audio clip (via backend model or local Phi / MusicGen).
+
+ Style presets (“lo-fi beat”, “cinematic strings”) trained / cached for fast reuse.
+
+ Voice command interface (“duplicate track two”, “stretch to 4 bars”).
+
+ SWR-based state fetch + cache layer for AI clip metadata
+
+package-lock
+
+.
+
+🧩 Generative Mix Assist
+
+ Prompt-based mix assistant (“make vocals brighter”, “side-chain to kick”).
+
+ Scene mixer: auto-balance based on stem type and energy level.
+
+ “Describe this sound” inverse prompt feature → convert audio → text tags.
+
+⚙️ Workflow / UX Enhancements
+🪄 Clip & Session Tools
+
+ Nanoid IDs for clip persistence across reloads
+
+package-lock
+
+.
+
+ Undo/redo stack (time-travel state).
+
+ Session save / load (JSON schema + Blob download).
+
+ Drag-and-drop file import (MP3, WAV, FLAC).
+
+ Built-in recording via MediaRecorder API.
+
+🖼️ Interface
+
+ Tailwind UI theme switcher (dark / light / “studio mode”).
+
+ Modular panels (dockable mixer, browser, AI console).
+
+ Keyboard shortcuts manager (⌘K palette).
+
+ Radix Slider controls for volume, panning, effect parameters
+
+package-lock
+
+.
+
+ Waveform zoom slider integrated into timeline header.
+
+🎚️ Effect & Plugin Layer
+
+ Modular effect rack (UI + Web Audio nodes).
+
+ Built-in EQ, compressor, delay, reverb.
+
+ “Describe the mix” → auto-build FX chain.
+
+ Visualization panel showing gain reduction, spectrum per track.
+
+ Parameter automation recording.
+
+🌐 Collaboration / Export
+
+ Session export to JSON (KISSjson ready for AI replay).
+
+ Shared URL or cloud sync (room sessions).
+
+ Real-time cursor presence for collab editing.
+
+ Export stems / mixdown / MIDI.
+
+ “Describe song to share” → text manifest for AI regeneration.
+
+🧭 Stretch Goals
+
+ Multimodal training integration (SEET-compatible clip metadata layer).
+
+ AI agent assistants that generate session layouts (“start a melancholy ambient track”).
+
+ Audio grid quantization on semantic beats (not just temporal).
+
+ Browser-based MIDI controller binding + gesture learn.

@@ -1,11 +1,13 @@
 import { useCallback, useEffect, useMemo, useState, type CSSProperties } from "react";
 import { ProjectProvider, useProjectStore, type PreferencesUpdate } from "./state/ProjectStore";
+import type { AutomationChannel } from "./types";
 import { ProjectNavigator } from "./components/ProjectNavigator";
 import { Timeline } from "./components/Timeline";
 import { MasterControls } from "./components/MasterControls";
 import { LiveLooper } from "./components/LiveLooper";
 import { SampleDetailPanel } from "./components/SampleDetailPanel";
 import { VstRack } from "./components/VstRack";
+import { Spectrogram } from "./components/Spectrogram";
 import type { SampleClip } from "./types";
 import { theme } from "./theme";
 import { MixerPanel } from "./components/MixerPanel";
@@ -30,6 +32,21 @@ function AppShell() {
 
   useEffect(() => {
     audioEngine.syncChannelMix(project.channels);
+  }, [project.channels]);
+
+  useEffect(() => {
+    audioEngine.setMastering(project.mastering);
+  }, [project.mastering]);
+
+  useEffect(() => {
+    audioEngine.setTempo(project.masterBpm);
+  }, [project.masterBpm]);
+
+  useEffect(() => {
+    const automation = project.channels.filter(
+      (c): c is AutomationChannel => c.type === "automation",
+    );
+    audioEngine.setAutomationChannels(automation);
   }, [project.channels]);
 
   const handleUpdatePreferences = useCallback(
@@ -153,6 +170,7 @@ function AppShell() {
           onSelectSample={setSelectedSampleId}
           selectedSampleId={selectedSampleId}
         />
+        <Spectrogram width={720} height={120} />
       </main>
 
       {activePanel && (

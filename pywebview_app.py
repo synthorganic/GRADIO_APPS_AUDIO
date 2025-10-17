@@ -24,6 +24,11 @@ FRONTEND_DIR = ROOT / "daw-mixer"
 HOST = "127.0.0.1"
 PORT = 5173
 APP_URL = f"http://{HOST}:{PORT}"
+
+# Backend (optional) — used for separation if available
+BACKEND_HOST = "127.0.0.1"
+BACKEND_PORT = 8001
+BACKEND_URL = f"http://{BACKEND_HOST}:{BACKEND_PORT}"
 DEV_COMMAND = [
     "npm",
     "run",
@@ -61,6 +66,25 @@ def start_dev_server() -> subprocess.Popen[str]:
     )
 
 
+def start_backend_server() -> subprocess.Popen[str]:
+    """Start the FastAPI backend server if available."""
+    # Use uvicorn if installed; otherwise raise
+    return subprocess.Popen(
+        [
+            "uvicorn",
+            "backend.server:app",
+            "--host",
+            BACKEND_HOST,
+            "--port",
+            str(BACKEND_PORT),
+        ],
+        cwd=str(ROOT),
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+    )
+
+
 def ensure_dev_server() -> Tuple[Optional[subprocess.Popen[str]], bool]:
     """Ensure the dev server is running.
 
@@ -79,6 +103,26 @@ def ensure_dev_server() -> Tuple[Optional[subprocess.Popen[str]], bool]:
             process.kill()
         raise RuntimeError("Vite development server did not start in time.")
 
+    return process, True
+
+
+def ensure_backend_server() -> Tuple[Optional[subprocess.Popen[str]], bool]:
+    """Ensure the backend is running; start if not available."""
+    if wait_for_server(f"{BACKEND_URL}/api/health", timeout=2.0):
+        return None, False
+    try:
+        process = start_backend_server()
+    except FileNotFoundError:
+        # uvicorn not installed — backend optional
+        return None, False
+    if not wait_for_server(f"{BACKEND_URL}/api/health", timeout=20.0):
+        process.terminate()
+        try:
+            process.wait(timeout=5)
+        except subprocess.TimeoutExpired:
+            process.kill()
+        # optional, so don't crash app
+        return None, False
     return process, True
 
 
@@ -101,15 +145,20 @@ def main() -> None:
         raise SystemExit(str(exc)) from exc
 
     cleanup_target: Optional[subprocess.Popen[str]] = process if started else None
+    backend_proc, backend_started = ensure_backend_server()
+    if backend_started:
+        cleanup_target = cleanup_target  # keep primary ref
 
     def on_exit() -> None:
         shutdown_process(cleanup_target)
+        shutdown_process(backend_proc)
 
     try:
         webview.create_window("DAW Mixer", APP_URL, width=1200, height=800)
         webview.start(on_exit=on_exit)
     finally:
         shutdown_process(cleanup_target)
+        shutdown_process(backend_proc)
 
 
 if __name__ == "__main__":

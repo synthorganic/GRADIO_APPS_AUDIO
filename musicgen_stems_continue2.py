@@ -107,7 +107,12 @@ AudioGen = getattr(_aud_models, "AudioGen", None)
 # ---------- Optional deps [UNCHANGED] ----------
 DEMUCS_AVAILABLE, demucs = _optional_import("demucs")
 if DEMUCS_AVAILABLE:
-    importlib.import_module("demucs.separate")
+    # Importing "demucs.separate" can pull in torchaudio native libs; when not
+    # present we degrade gracefully to keep this module importable for tests.
+    try:  # pragma: no cover - depends on environment
+        importlib.import_module("demucs.separate")
+    except Exception:
+        DEMUCS_AVAILABLE, demucs = False, None
 
 MATCHERING_AVAILABLE, mg = _optional_import("matchering")
 
