@@ -14,6 +14,7 @@ import {
 import { createWaveform } from "./shared/waveforms";
 import { useLoopLibrary } from "./state/LoopLibraryStore";
 import { TrackSelectionModal } from "./components/TrackSelectionModal";
+import type { AnalyzedTrackSummary } from "./components/TrackUploadPanel";
 
 const CAMELOT_ORDER = [
   "1A",
@@ -192,6 +193,7 @@ export default function App() {
     D: false,
   });
   const [selectorKey, setSelectorKey] = useState<string | null>(null);
+  const [libraryTracks, setLibraryTracks] = useState<AnalyzedTrackSummary[]>([]);
   const loopTimers = useRef<Map<string, number>>(new Map());
 
   const handleTracksAnalyzed = (tracks: AnalyzedTrackSummary[]) => {

@@ -2,7 +2,7 @@ import type { MouseEvent } from "react";
 import { memo } from "react";
 import { theme } from "@daw/theme";
 import { cardSurfaceStyle, toolbarButtonStyle } from "@daw/components/layout/styles";
-import { WaveformPreview } from "@daw/shared/WaveformPreview";
+import { WaveformPreview } from "./WaveformPreview";
 import type { LoopLibraryItem } from "../state/LoopLibraryStore";
 
 export interface TrackSelectionModalProps {
