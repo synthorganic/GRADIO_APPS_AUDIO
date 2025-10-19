@@ -1,0 +1,146 @@
+:root {
+  color-scheme: dark;
+  font-family: "Inter", "Segoe UI", system-ui, -apple-system, sans-serif;
+  background: radial-gradient(circle at center, rgba(241, 139, 180, 0.35), rgba(3, 18, 26, 0.95)),
+    linear-gradient(180deg, rgba(9, 26, 40, 0.95) 0%, rgba(3, 12, 20, 1) 100%);
+  min-height: 100vh;
+}
+
+body {
+  margin: 0;
+  min-height: 100vh;
+  background: transparent;
+  color: #eef8fb;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+a {
+  color: inherit;
+}
+
+button {
+  font: inherit;
+}
+
+#root {
+  min-height: 100vh;
+}
+
+.harmoniq-shell {
+  min-height: 100vh;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 44px 36px;
+}
+
+.harmoniq-shell__frame {
+  width: min(1380px, 100%);
+  display: grid;
+  gap: 28px;
+  grid-template-columns: minmax(0, 1fr);
+  grid-template-rows: minmax(520px, auto) minmax(420px, auto);
+  align-items: stretch;
+}
+
+.harmoniq-shell__matrix {
+  grid-column: 1 / -1;
+  grid-row: 1 / 2;
+}
+
+.harmoniq-shell__wheel {
+  grid-column: 1 / -1;
+  grid-row: 2 / 3;
+  align-self: end;
+}
+
+.harmoniq-shell__library {
+  margin-top: 24px;
+  display: flex;
+  justify-content: center;
+}
+
+.harmoniq-shell__library-content {
+  width: min(100%, 1120px);
+  display: grid;
+  gap: 20px;
+}
+
+.harmoniq-shell__library-columns {
+  display: grid;
+  gap: 20px;
+  grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
+}
+
+.harmoniq-shell__wheel-layout {
+  display: grid;
+  grid-template-columns: minmax(240px, 1fr) minmax(560px, 2fr) minmax(240px, 1fr);
+  align-items: stretch;
+  gap: 24px;
+}
+
+.harmoniq-shell__wheel-layout > :nth-child(2) {
+  justify-self: center;
+}
+
+@media (max-width: 1200px) {
+  .harmoniq-shell {
+    padding: 36px 24px;
+  }
+
+  .harmoniq-shell__frame {
+    grid-template-rows: minmax(480px, auto) minmax(380px, auto);
+  }
+
+  .harmoniq-shell__wheel-layout {
+    grid-template-columns: minmax(200px, 1fr) minmax(520px, 2fr) minmax(200px, 1fr);
+  }
+
+  .harmoniq-shell__library-columns {
+    grid-template-columns: repeat(auto-fit, minmax(260px, 1fr));
+  }
+}
+
+@media (max-width: 1024px) {
+  .harmoniq-shell {
+    padding: 28px 20px;
+  }
+
+  .harmoniq-shell__frame {
+    grid-template-columns: minmax(0, 1fr);
+    grid-template-rows: none;
+  }
+
+  .harmoniq-shell__matrix,
+  .harmoniq-shell__wheel {
+    grid-column: auto;
+    grid-row: auto;
+  }
+
+  .harmoniq-shell__wheel-layout {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .harmoniq-shell__wheel-layout > :nth-child(2) {
+    justify-self: stretch;
+  }
+
+  .harmoniq-shell__library-columns {
+    grid-template-columns: minmax(0, 1fr);
+  }
+}
+
+@keyframes clippingPulse {
+  0% {
+    box-shadow: 0 0 0 0 rgba(255, 71, 112, 0.8);
+  }
+  70% {
+    box-shadow: 0 0 24px 8px rgba(255, 71, 112, 0.0);
+  }
+  100% {
+    box-shadow: 0 0 0 0 rgba(255, 71, 112, 0);
+  }
+}
