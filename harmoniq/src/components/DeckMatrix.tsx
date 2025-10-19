@@ -2,13 +2,14 @@ import { Fragment, useMemo, useRef } from "react";
 import type { PointerEvent } from "react";
 import { theme } from "@daw/theme";
 import { cardSurfaceStyle, toolbarButtonStyle } from "@daw/components/layout/styles";
-import { WaveformPreview } from "@daw/shared/WaveformPreview";
+import { WaveformPreview } from "./WaveformPreview";
 import type {
   CrossfadeState,
   DeckId,
   DeckPerformance,
   LoopSlot,
   LoopSlotStatus,
+  StemStatus,
   StemType,
 } from "../types";
 
@@ -300,6 +301,24 @@ const STEM_OPTIONS: ReadonlyArray<{
   { id: "drums", label: "Drums", accent: "rgba(103, 255, 230, 0.85)" },
   { id: "synths", label: "Synths", accent: "rgba(132, 94, 255, 0.85)" },
 ];
+
+const STEM_BADGE_COLORS: Record<StemStatus, { background: string; border: string; text: string }> = {
+  standby: {
+    background: "rgba(9, 32, 44, 0.75)",
+    border: "1px solid rgba(120, 203, 220, 0.35)",
+    text: theme.text,
+  },
+  active: {
+    background: "rgba(103, 255, 230, 0.25)",
+    border: "1px solid rgba(103, 255, 230, 0.55)",
+    text: theme.button.primaryText,
+  },
+  muted: {
+    background: "rgba(255, 126, 170, 0.18)",
+    border: "1px solid rgba(255, 126, 170, 0.45)",
+    text: "rgba(255, 189, 214, 0.9)",
+  },
+};
 
 function formatStemLabel(stem: StemType) {
   return stem.charAt(0).toUpperCase() + stem.slice(1);
