@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState, type CSSProperties } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import { ProjectProvider, useProjectStore, type PreferencesUpdate } from "./state/ProjectStore";
 import { ProjectNavigator } from "./components/ProjectNavigator";
 import { Timeline } from "./components/Timeline";
@@ -13,6 +13,15 @@ import { audioEngine } from "./lib/audioEngine";
 import { TopMenu } from "./components/TopMenu";
 import soniqLogo from "./assets/soniq-logo.svg";
 import { SettingsDialog } from "./components/SettingsDialog";
+import { DeckPanel, type DeckId } from "./components/harmoniq/DeckPanel";
+import { CrossFader } from "./components/harmoniq/CrossFader";
+import { HarmonicWheel } from "./components/harmoniq/HarmonicWheel";
+import { LoopLibrary } from "./components/harmoniq/LoopLibrary";
+import {
+  gridRows,
+  toolbarButtonDisabledStyle,
+  toolbarButtonStyle
+} from "./components/layout/styles";
 
 type FloatingPanel = "mixer" | "vst" | "sample";
 
@@ -22,11 +31,26 @@ function AppShell() {
   const [selectedSampleId, setSelectedSampleId] = useState<string | null>(null);
   const [activePanel, setActivePanel] = useState<FloatingPanel | null>(null);
   const [isSettingsOpen, setIsSettingsOpen] = useState(false);
+  const [deckAssignments, setDeckAssignments] = useState<Record<DeckId, string | null>>({
+    A: null,
+    B: null
+  });
+  const [crossfaderPosition, setCrossfaderPosition] = useState(0.5);
+  const [selectedKey, setSelectedKey] = useState<string | null>(null);
 
   const selectedSample = useMemo<SampleClip | null>(() => {
     if (!selectedSampleId) return null;
     return project.samples.find((sample) => sample.id === selectedSampleId) ?? null;
   }, [selectedSampleId, project.samples]);
+
+  const resolveDeckSample = useCallback(
+    (deck: DeckId) => {
+      const sampleId = deckAssignments[deck];
+      if (!sampleId) return null;
+      return project.samples.find((sample) => sample.id === sampleId) ?? null;
+    },
+    [deckAssignments, project.samples]
+  );
 
   useEffect(() => {
     audioEngine.syncChannelMix(project.channels);
@@ -42,6 +66,31 @@ function AppShell() {
     vst: "VST Rack",
     sample: "Sample Details"
   };
+
+  const handleAssignDeck = useCallback(
+    (deck: DeckId) => {
+      if (!selectedSample) return;
+      setDeckAssignments((previous) => ({ ...previous, [deck]: selectedSample.id }));
+    },
+    [selectedSample]
+  );
+
+  const handleFocusDeck = useCallback(
+    (deck: DeckId) => {
+      const sampleId = deckAssignments[deck];
+      setSelectedSampleId(sampleId ?? null);
+    },
+    [deckAssignments]
+  );
+
+  const handleAssignFromLibrary = useCallback((deck: DeckId, loopId: string) => {
+    setDeckAssignments((previous) => ({ ...previous, [deck]: loopId }));
+    setSelectedSampleId(loopId);
+  }, []);
+
+  const handlePreviewLoop = useCallback((loopId: string) => {
+    setSelectedSampleId(loopId);
+  }, []);
 
   const renderPanelContent = () => {
     if (!activePanel) return null;
@@ -111,8 +160,7 @@ function AppShell() {
               onClick={() => selectedSample && setActivePanel("sample")}
               style={{
                 ...toolbarButtonStyle,
-                opacity: selectedSample ? 1 : 0.4,
-                cursor: selectedSample ? "pointer" : "not-allowed"
+                ...(selectedSample ? {} : toolbarButtonDisabledStyle)
               }}
             >
               Sample
@@ -141,17 +189,59 @@ function AppShell() {
         style={{
           gridColumn: "2 / span 1",
           padding: "14px 18px",
-          display: "flex",
-          flexDirection: "column",
+          display: "grid",
+          gridTemplateRows: gridRows("minmax(0, 1fr)", "auto", "minmax(0, 1fr)"),
           gap: "12px",
           position: "relative",
           zIndex: 1
         }}
       >
-        <Timeline
-          project={project}
-          onSelectSample={setSelectedSampleId}
-          selectedSampleId={selectedSampleId}
+        <div
+          style={{
+            display: "grid",
+            gridTemplateColumns: "minmax(0, 1fr) minmax(0, 2.6fr) minmax(0, 1fr)",
+            gap: "12px",
+            alignItems: "stretch"
+          }}
+        >
+          <DeckPanel
+            deckId="A"
+            assignedSample={resolveDeckSample("A")}
+            onRequestAssign={handleAssignDeck}
+            onFocusDeck={handleFocusDeck}
+            canAssign={Boolean(selectedSample)}
+          />
+          <Timeline
+            project={project}
+            onSelectSample={setSelectedSampleId}
+            selectedSampleId={selectedSampleId}
+          />
+          <DeckPanel
+            deckId="B"
+            assignedSample={resolveDeckSample("B")}
+            onRequestAssign={handleAssignDeck}
+            onFocusDeck={handleFocusDeck}
+            canAssign={Boolean(selectedSample)}
+          />
+        </div>
+        <div
+          style={{
+            display: "grid",
+            gridTemplateColumns: "minmax(0, 1.4fr) minmax(0, 1fr)",
+            gap: "12px"
+          }}
+        >
+          <CrossFader
+            value={crossfaderPosition}
+            onChange={setCrossfaderPosition}
+            onCueDeck={handleFocusDeck}
+          />
+          <HarmonicWheel selectedKey={selectedKey} onSelectKey={setSelectedKey} />
+        </div>
+        <LoopLibrary
+          loops={project.samples}
+          onPreviewLoop={handlePreviewLoop}
+          onAssignToDeck={handleAssignFromLibrary}
         />
       </main>
 
@@ -229,18 +319,6 @@ function AppShell() {
     </div>
   );
 }
-
-const toolbarButtonStyle: CSSProperties = {
-  border: `1px solid ${theme.button.outline}`,
-  background: theme.button.base,
-  color: theme.text,
-  borderRadius: "999px",
-  padding: "4px 12px",
-  fontSize: "0.7rem",
-  textTransform: "uppercase",
-  letterSpacing: "0.06em",
-  cursor: "pointer"
-};
 
 export default function App() {
   return (
