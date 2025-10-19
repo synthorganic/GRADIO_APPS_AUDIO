@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { ProjectProvider, useProjectStore, type PreferencesUpdate } from "./state/ProjectStore";
+import { HarmoniqProvider } from "./harmoniq/state";
 import { ProjectNavigator } from "./components/ProjectNavigator";
 import { Timeline } from "./components/Timeline";
 import { MasterControls } from "./components/MasterControls";
@@ -323,7 +324,9 @@ function AppShell() {
 export default function App() {
   return (
     <ProjectProvider>
-      <AppShell />
+      <HarmoniqProvider>
+        <AppShell />
+      </HarmoniqProvider>
     </ProjectProvider>
   );
 }
