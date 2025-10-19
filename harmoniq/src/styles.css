@@ -63,8 +63,16 @@ button {
   justify-content: center;
 }
 
-.harmoniq-shell__library > * {
-  width: min(100%, 960px);
+.harmoniq-shell__library-content {
+  width: min(100%, 1120px);
+  display: grid;
+  gap: 20px;
+}
+
+.harmoniq-shell__library-columns {
+  display: grid;
+  gap: 20px;
+  grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
 }
 
 .harmoniq-shell__wheel-layout {
@@ -90,6 +98,10 @@ button {
   .harmoniq-shell__wheel-layout {
     grid-template-columns: minmax(200px, 1fr) minmax(520px, 2fr) minmax(200px, 1fr);
   }
+
+  .harmoniq-shell__library-columns {
+    grid-template-columns: repeat(auto-fit, minmax(260px, 1fr));
+  }
 }
 
 @media (max-width: 1024px) {
@@ -114,6 +126,10 @@ button {
 
   .harmoniq-shell__wheel-layout > :nth-child(2) {
     justify-self: stretch;
+  }
+
+  .harmoniq-shell__library-columns {
+    grid-template-columns: minmax(0, 1fr);
   }
 }
 

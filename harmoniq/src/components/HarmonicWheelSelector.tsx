@@ -12,6 +12,7 @@ const WINDOW_HEIGHT = Math.round(WHEEL_SIZE / 2 + VISIBLE_OVERLAP);
 export interface HarmonicWheelSelectorProps {
   value: string;
   onChange: (value: string) => void;
+  onOpenKey?: (value: string) => void;
 }
 
 type ActivePointer = {
@@ -19,7 +20,7 @@ type ActivePointer = {
   ring: "outer" | "inner";
 };
 
-export function HarmonicWheelSelector({ value, onChange }: HarmonicWheelSelectorProps) {
+export function HarmonicWheelSelector({ value, onChange, onOpenKey }: HarmonicWheelSelectorProps) {
   const containerRef = useRef<HTMLDivElement | null>(null);
   const pointer = useRef<ActivePointer | null>(null);
 
@@ -34,7 +35,7 @@ export function HarmonicWheelSelector({ value, onChange }: HarmonicWheelSelector
     return entries;
   }, []);
 
-  const selectFromEvent = (event: PointerEvent<Element>) => {
+  const selectFromEvent = (event: PointerEvent<Element>, shouldOpen = false) => {
     const element = containerRef.current;
     if (!element) return;
     const bounds = element.getBoundingClientRect();
@@ -52,11 +53,14 @@ export function HarmonicWheelSelector({ value, onChange }: HarmonicWheelSelector
     const index = Math.round(normalized / 30) % 12;
     const key = ring === "outer" ? OUTER_RING[index] : INNER_RING[index];
     onChange(key);
+    if (shouldOpen) {
+      onOpenKey?.(key);
+    }
   };
 
   const handlePointerDown = (event: PointerEvent<HTMLDivElement>) => {
     event.currentTarget.setPointerCapture(event.pointerId);
-    selectFromEvent(event);
+    selectFromEvent(event, true);
   };
 
   const handlePointerMove = (event: PointerEvent<HTMLDivElement>) => {
@@ -167,7 +171,10 @@ export function HarmonicWheelSelector({ value, onChange }: HarmonicWheelSelector
                 key={`${ring}-${key}`}
                 type="button"
                 onPointerDown={(event) => {
-                  selectFromEvent(event);
+                  selectFromEvent(event, true);
+                }}
+                onClick={() => {
+                  onOpenKey?.(key);
                 }}
                 style={{
                   position: "absolute",
