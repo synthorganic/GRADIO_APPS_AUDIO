@@ -194,6 +194,68 @@ export default function App() {
   const [selectorKey, setSelectorKey] = useState<string | null>(null);
   const loopTimers = useRef<Map<string, number>>(new Map());
 
+  const handleTracksAnalyzed = (tracks: AnalyzedTrackSummary[]) => {
+    if (!tracks.length) return;
+    setLibraryTracks((prev) => {
+      const merged = new Map<string, AnalyzedTrackSummary>();
+      prev.forEach((item) => {
+        merged.set(item.origin, item);
+      });
+      tracks.forEach((item) => {
+        merged.set(item.origin, item);
+      });
+      return Array.from(merged.values()).sort((a, b) => a.name.localeCompare(b.name));
+    });
+  };
+
+  const computeSeedFromName = (name: string) => {
+    const normalized = name.toLowerCase();
+    let hash = 0;
+    for (let index = 0; index < normalized.length; index += 1) {
+      hash = (hash * 33 + normalized.charCodeAt(index)) & 0xffffffff;
+    }
+    return Math.abs(hash % 2500) / 1000 + 0.3;
+  };
+
+  const handleFocusDeck = (deckId: DeckId) => {
+    setDecks((prev) => prev.map((deck) => ({ ...deck, isFocused: deck.id === deckId })));
+    const targets: Record<DeckId, CrossfadeState> = {
+      A: { x: 0, y: 0 },
+      B: { x: 1, y: 0 },
+      C: { x: 0, y: 1 },
+      D: { x: 1, y: 1 },
+    };
+    setCrossfade(targets[deckId]);
+  };
+
+  const handleLoadTrackToDeck = (deckId: DeckId, track: AnalyzedTrackSummary) => {
+    const waveformSeed = computeSeedFromName(track.name);
+    setDecks((prev) =>
+      prev.map((deck) =>
+        deck.id === deckId
+          ? {
+              ...deck,
+              loopName: track.name,
+              waveform: createWaveform(waveformSeed),
+              bpm: track.bpm,
+              scale: track.scale,
+              source: track.origin,
+              stems: track.stems.map((stem) => ({
+                id: `${track.id}-${stem.id}`,
+                label: stem.label,
+                status: "standby",
+              })),
+            }
+          : deck,
+      ),
+    );
+    setLoopSlots((prev) => ({
+      ...prev,
+      [deckId]: prev[deckId]?.map((slot) => ({ ...slot, status: "idle" })) ?? createLoopSlots(deckId),
+    }));
+    handleFocusDeck(deckId);
+  };
+
   useEffect(() => {
     if (folders.length === 0) return;
     setSelectedFolder((prev) => (folders.includes(prev) ? prev : folders[0]));
@@ -266,17 +328,6 @@ export default function App() {
         updateLoopSlotStatus(deckId, slotId, "playing");
       });
     });
-  };
-
-  const handleFocusDeck = (deckId: DeckId) => {
-    setDecks((prev) => prev.map((deck) => ({ ...deck, isFocused: deck.id === deckId })));
-    const targets: Record<DeckId, CrossfadeState> = {
-      A: { x: 0, y: 0 },
-      B: { x: 1, y: 0 },
-      C: { x: 0, y: 1 },
-      D: { x: 1, y: 1 },
-    };
-    setCrossfade(targets[deckId]);
   };
 
   const handleUpdateDeck = (deckId: DeckId, patch: Partial<DeckPerformance>) => {

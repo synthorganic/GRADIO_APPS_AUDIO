@@ -776,8 +776,21 @@ export function DeckMatrix({
                   <div style={{ display: "grid", gap: "4px" }}>
                     <strong style={{ fontSize: "0.9rem" }}>Deck {deck.id}</strong>
                     <span style={{ fontSize: "0.7rem", color: theme.textMuted }}>{deck.loopName}</span>
+                    {deck.source ? (
+                      <span style={{ fontSize: "0.64rem", color: theme.button.primaryText }}>
+                        {deck.source}
+                      </span>
+                    ) : null}
                   </div>
                   <div style={{ textAlign: "right", display: "grid", gap: "4px" }}>
+                    {deck.bpm ? (
+                      <span style={{ fontSize: "0.67rem", color: theme.button.primaryText }}>
+                        {deck.bpm} BPM
+                      </span>
+                    ) : null}
+                    {deck.scale ? (
+                      <span style={{ fontSize: "0.67rem", color: theme.textMuted }}>Scale {deck.scale}</span>
+                    ) : null}
                     <span style={{ fontSize: "0.67rem", color: theme.textMuted }}>Zoom ×{deck.zoom.toFixed(2)}</span>
                     <span style={{ fontSize: "0.67rem", color: theme.textMuted }}>
                       Filter {Math.round(deck.filter * 100)}%
@@ -787,6 +800,30 @@ export function DeckMatrix({
                     </span>
                   </div>
                 </header>
+                {deck.stems && deck.stems.length ? (
+                  <div style={{ display: "flex", flexWrap: "wrap", gap: "8px" }}>
+                    {deck.stems.map((stem) => {
+                      const colors = STEM_BADGE_COLORS[stem.status];
+                      return (
+                        <span
+                          key={stem.id}
+                          style={{
+                            padding: "6px 10px",
+                            borderRadius: "999px",
+                            border: colors.border,
+                            background: colors.background,
+                            color: colors.text,
+                            fontSize: "0.64rem",
+                            letterSpacing: "0.08em",
+                            textTransform: "uppercase",
+                          }}
+                        >
+                          {stem.label} · {stem.status === "standby" ? "Standby" : stem.status === "active" ? "On" : "Muted"}
+                        </span>
+                      );
+                    })}
+                  </div>
+                ) : null}
                 <div
                   style={{
                     display: "flex",
