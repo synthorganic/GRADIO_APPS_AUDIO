@@ -28,6 +28,7 @@ import { useDemucsProcessing } from "../hooks/useDemucsProcessing";
 import { theme } from "../theme";
 import { sliceSampleSegment } from "../lib/sampleTools";
 import { TrackEffectsPanel } from "./TrackEffectsPanel";
+import { WaveformPreview } from "../shared/WaveformPreview";
 import { describeHeuristics, getStemEngineDefinition } from "../stem_engines";
 
 type SnapResolution = "measure" | "half-measure" | "beat" | "half-beat";
@@ -178,52 +179,6 @@ function trimNotesFromStart(notes: MidiNote[], delta: number, maxLength: number)
     acc.push({ ...note, start: clampedStart, length });
     return acc;
   }, []);
-}
-
-function ClipWaveform({ waveform }: { waveform: Float32Array }) {
-  const path = useMemo(() => {
-    const length = waveform.length;
-    if (length === 0) return null;
-    const viewWidth = Math.max(length - 1, 1);
-    const halfHeight = 50;
-    const scale = viewWidth === 0 ? 0 : viewWidth;
-    const divisor = Math.max(length - 1, 1);
-
-    let commands = `M 0 ${halfHeight}`;
-    for (let index = 0; index < length; index += 1) {
-      const amplitude = Math.min(1, Math.max(0, waveform[index] ?? 0));
-      const x = (index / divisor) * scale;
-      const y = halfHeight - amplitude * (halfHeight - 4);
-      commands += ` L ${x.toFixed(2)} ${y.toFixed(2)}`;
-    }
-    for (let index = length - 1; index >= 0; index -= 1) {
-      const amplitude = Math.min(1, Math.max(0, waveform[index] ?? 0));
-      const x = (index / divisor) * scale;
-      const y = halfHeight + amplitude * (halfHeight - 4);
-      commands += ` L ${x.toFixed(2)} ${y.toFixed(2)}`;
-    }
-    commands += " Z";
-    return { commands, viewWidth };
-  }, [waveform]);
-
-  if (!path) return null;
-
-  return (
-    <svg
-      width="100%"
-      height="100%"
-      viewBox={`0 0 ${Math.max(path.viewWidth, 1)} 100`}
-      preserveAspectRatio="none"
-      style={{ pointerEvents: "none" }}
-    >
-      <path
-        d={path.commands}
-        fill="rgba(255, 255, 255, 0.25)"
-        stroke="rgba(255, 255, 255, 0.4)"
-        strokeWidth={0.5}
-      />
-    </svg>
-  );
 }
 
 export function Timeline({ project, selectedSampleId, onSelectSample }: TimelineProps) {
@@ -2446,7 +2401,7 @@ export function Timeline({ project, selectedSampleId, onSelectSample }: Timeline
                               }}
                             >
                               {sample.waveform && sample.waveform.length > 0 ? (
-                                <ClipWaveform waveform={sample.waveform} />
+                                <WaveformPreview waveform={sample.waveform} />
                               ) : (
                                 <span style={{ fontSize: "0.6rem", color: theme.textMuted }}>
                                   Analyzing waveform…
