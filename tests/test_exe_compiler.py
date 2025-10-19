@@ -108,37 +108,3 @@ def test_build_executable_uses_default_requirements(tmp_path: Path):
     )
 
     assert str(requirements) in runner.commands[0]
-
-
-def test_build_executable_windowed_adds_flag(tmp_path: Path):
-    entry = tmp_path / "pywebview_app.py"
-    entry.write_text("print('hi')\n")
-
-    runner = FakeRunner()
-    exe_compiler.build_executable(
-        entry,
-        build_root=tmp_path / "build",
-        windowed=True,
-        command_runner=runner,
-        module_checker=lambda _: True,
-    )
-
-    pyinstaller_cmd = runner.commands[-1]
-    assert "--noconsole" in pyinstaller_cmd
-
-
-def test_cli_defaults_to_windowed_for_pywebview(tmp_path: Path, monkeypatch):
-    script = tmp_path / "pywebview_app.py"
-    script.write_text("print('hi')\n")
-
-    fake_build = []
-
-    def fake_build_executable(*args, **kwargs):
-        fake_build.append(kwargs["windowed"])
-        return tmp_path / "dist" / "demo"
-
-    monkeypatch.setattr(exe_compiler, "build_executable", fake_build_executable)
-
-    exe_compiler.main([str(script)])
-
-    assert fake_build == [True]

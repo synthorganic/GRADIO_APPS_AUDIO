@@ -132,7 +132,6 @@ def build_with_pyinstaller(
     spec_dir: Path,
     name: Optional[str] = None,
     extra_args: Optional[Sequence[str]] = None,
-    windowed: bool = False,
     command_runner: Optional[CommandRunner] = None,
 ) -> None:
     """Invoke PyInstaller with sensible defaults for this repository."""
@@ -152,8 +151,6 @@ def build_with_pyinstaller(
         command.extend(["--name", name])
     if extra_args:
         command.extend(list(extra_args))
-    if windowed:
-        command.append("--noconsole")
 
     runner = command_runner or run_command
     runner(command)
@@ -166,7 +163,6 @@ def build_executable(
     build_root: Optional[Path] = None,
     name: Optional[str] = None,
     extra_pyinstaller_args: Optional[Sequence[str]] = None,
-    windowed: bool = False,
     command_runner: Optional[CommandRunner] = None,
     module_checker: ModuleChecker = module_available,
 ) -> Path:
@@ -204,7 +200,6 @@ def build_executable(
         spec_dir=spec_dir,
         name=name,
         extra_args=extra_pyinstaller_args,
-        windowed=windowed,
         command_runner=runner,
     )
 
@@ -247,19 +242,6 @@ def parse_args(argv: Optional[Sequence[str]] = None) -> argparse.Namespace:
         default=None,
         help="Extra arguments forwarded to PyInstaller (can be repeated).",
     )
-    parser.add_argument(
-        "--windowed",
-        dest="windowed",
-        action="store_true",
-        help="Build the executable without a console window (PyWebview-style).",
-    )
-    parser.add_argument(
-        "--console",
-        dest="windowed",
-        action="store_false",
-        help="Keep a console window attached to the executable.",
-    )
-    parser.set_defaults(windowed=None)
     return parser.parse_args(argv)
 
 
@@ -272,19 +254,12 @@ def main(argv: Optional[Sequence[str]] = None) -> Path:
     if requirements is not None:
         requirements = requirements.resolve()
     build_root = Path(args.build_root).resolve()
-    default_windowed = (
-        args.windowed
-        if args.windowed is not None
-        else entry_path.name.lower().startswith("pywebview")
-    )
-
     output = build_executable(
         entry_path,
         requirements=requirements,
         build_root=build_root,
         name=args.name,
         extra_pyinstaller_args=args.pyinstaller_args,
-        windowed=default_windowed,
     )
     print(f"Executable created at: {output}")
     return output

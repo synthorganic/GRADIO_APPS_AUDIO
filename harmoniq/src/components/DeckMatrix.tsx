@@ -3,64 +3,14 @@ import type { PointerEvent } from "react";
 import { theme } from "@daw/theme";
 import { cardSurfaceStyle, toolbarButtonStyle } from "@daw/components/layout/styles";
 import { WaveformPreview } from "@daw/shared/WaveformPreview";
-
-export type DeckId = "A" | "B" | "C" | "D";
-
-export type LoopSlotStatus = "idle" | "queued" | "recording" | "playing";
-
-export interface LoopSlot {
-  id: string;
-  label: string;
-  status: LoopSlotStatus;
-  length: "bar" | "half";
-}
-
-export type StemStatus = "standby" | "active" | "muted";
-
-export interface DeckStem {
-  id: string;
-  label: string;
-  status: StemStatus;
-}
-
-const STEM_BADGE_COLORS: Record<StemStatus, { background: string; border: string; text: string }> = {
-  standby: {
-    background: "rgba(21, 74, 98, 0.6)",
-    border: "rgba(103, 255, 230, 0.4)",
-    text: theme.button.primaryText,
-  },
-  active: {
-    background: "rgba(124, 84, 255, 0.5)",
-    border: "rgba(214, 189, 255, 0.6)",
-    text: theme.button.primaryText,
-  },
-  muted: {
-    background: "rgba(10, 32, 44, 0.7)",
-    border: "rgba(120, 203, 220, 0.25)",
-    text: theme.textMuted,
-  },
-};
-
-export interface DeckPerformance {
-  id: DeckId;
-  loopName: string;
-  waveform: Float32Array;
-  filter: number;
-  resonance: number;
-  zoom: number;
-  fxStack: string[];
-  isFocused: boolean;
-  level: number;
-  bpm?: number;
-  scale?: string;
-  stems?: DeckStem[];
-  source?: string;
-}
-
-export interface CrossfadeState {
-  x: number;
-  y: number;
-}
+import type {
+  CrossfadeState,
+  DeckId,
+  DeckPerformance,
+  LoopSlot,
+  LoopSlotStatus,
+  StemType,
+} from "../types";
 
 export interface DeckMatrixProps {
   decks: DeckPerformance[];
@@ -75,6 +25,8 @@ export interface DeckMatrixProps {
   masterPitch: number;
   onMasterTempoChange: (value: number) => void;
   onMasterPitchChange: (value: number) => void;
+  onToggleEq: (deckId: DeckId, band: "highs" | "mids" | "lows") => void;
+  onTriggerStem: (deckId: DeckId, stem: StemType) => void;
 }
 
 type PointerInfo = {
@@ -329,6 +281,46 @@ function LoopRecorderStrip({
   );
 }
 
+const EQ_BANDS: ReadonlyArray<{
+  id: "highs" | "mids" | "lows";
+  label: string;
+  tooltip: string;
+}> = [
+  { id: "highs", label: "Hi Cut", tooltip: "Dampen the airy shelf for quick filter sweeps." },
+  { id: "mids", label: "Mid Cut", tooltip: "Tuck the mids to let vocals and leads breathe." },
+  { id: "lows", label: "Low Cut", tooltip: "High-pass the sub to clear space for kicks." },
+];
+
+const STEM_OPTIONS: ReadonlyArray<{
+  id: StemType;
+  label: string;
+  accent: string;
+}> = [
+  { id: "vocals", label: "Vocals", accent: "rgba(255, 189, 255, 0.85)" },
+  { id: "drums", label: "Drums", accent: "rgba(103, 255, 230, 0.85)" },
+  { id: "synths", label: "Synths", accent: "rgba(132, 94, 255, 0.85)" },
+];
+
+function formatStemLabel(stem: StemType) {
+  return stem.charAt(0).toUpperCase() + stem.slice(1);
+}
+
+function renderStemStatus(deck: DeckPerformance) {
+  if (deck.stemStatus === "stem" && deck.activeStem) {
+    return `${formatStemLabel(deck.activeStem)} stem live`;
+  }
+  if (deck.stemStatus === "queued") {
+    if (deck.queuedStem) {
+      return `Queued ${formatStemLabel(deck.queuedStem)} stem`;
+    }
+    if (deck.activeStem) {
+      return "Returning to main mix";
+    }
+    return "Main mix queued";
+  }
+  return "Main mix";
+}
+
 function XYCrossfaderPad({
   value,
   onChange,
@@ -552,6 +544,8 @@ export function DeckMatrix({
   masterPitch,
   onMasterTempoChange,
   onMasterPitchChange,
+  onToggleEq,
+  onTriggerStem,
 }: DeckMatrixProps) {
   const gesture = useRef<GestureState | null>(null);
   const deckLookup = useMemo(() => new Map(decks.map((deck) => [deck.id, deck])), [decks]);
@@ -830,6 +824,92 @@ export function DeckMatrix({
                     })}
                   </div>
                 ) : null}
+                <div
+                  style={{
+                    display: "flex",
+                    justifyContent: "space-between",
+                    alignItems: "center",
+                    gap: "12px",
+                    flexWrap: "wrap",
+                  }}
+                >
+                  <div style={{ display: "flex", gap: "6px" }}>
+                    {EQ_BANDS.map((band) => {
+                      const isCut = deck.eqCuts[band.id];
+                      return (
+                        <button
+                          key={band.id}
+                          type="button"
+                          onClick={() => onToggleEq(deck.id, band.id)}
+                          title={band.tooltip}
+                          style={{
+                            ...toolbarButtonStyle,
+                            padding: "4px 10px",
+                            fontSize: "0.65rem",
+                            background: isCut ? "rgba(255, 97, 146, 0.75)" : "rgba(13, 40, 54, 0.75)",
+                            borderColor: isCut ? "rgba(255, 147, 190, 0.9)" : "rgba(120, 203, 220, 0.35)",
+                            color: isCut ? "rgba(10, 24, 34, 0.92)" : theme.text,
+                            boxShadow: isCut ? "0 0 12px rgba(255, 126, 170, 0.45)" : "none",
+                          }}
+                        >
+                          {band.label}
+                        </button>
+                      );
+                    })}
+                  </div>
+                  <div
+                    style={{
+                      fontSize: "0.65rem",
+                      color: theme.textMuted,
+                      textAlign: "right",
+                      minWidth: "140px",
+                    }}
+                  >
+                    {renderStemStatus(deck)}
+                  </div>
+                </div>
+                <div
+                  style={{
+                    display: "grid",
+                    gridTemplateColumns: "repeat(3, minmax(0, 1fr))",
+                    gap: "8px",
+                  }}
+                >
+                  {STEM_OPTIONS.map((option) => {
+                    const isActive = deck.activeStem === option.id && deck.stemStatus === "stem";
+                    const isQueued =
+                      deck.stemStatus === "queued" &&
+                      (deck.queuedStem === option.id || (!deck.queuedStem && deck.activeStem === option.id));
+                    return (
+                      <button
+                        key={option.id}
+                        type="button"
+                        onClick={() => onTriggerStem(deck.id, option.id)}
+                        style={{
+                          ...toolbarButtonStyle,
+                          padding: "6px 10px",
+                          fontSize: "0.66rem",
+                          textTransform: "uppercase",
+                          letterSpacing: "0.06em",
+                          background: isActive
+                            ? option.accent
+                            : isQueued
+                            ? "rgba(21, 74, 98, 0.85)"
+                            : "rgba(9, 32, 44, 0.8)",
+                          color: isActive ? "rgba(8, 20, 28, 0.92)" : theme.text,
+                          borderColor: isActive
+                            ? option.accent
+                            : isQueued
+                            ? "rgba(120, 203, 220, 0.5)"
+                            : "rgba(120, 203, 220, 0.3)",
+                          boxShadow: isActive ? "0 0 14px rgba(120, 203, 220, 0.55)" : "none",
+                        }}
+                      >
+                        {option.label}
+                      </button>
+                    );
+                  })}
+                </div>
                 <div
                   style={{
                     position: "relative",
