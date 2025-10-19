@@ -10,6 +10,11 @@ import {
 import { HarmonicWheelSelector } from "./components/HarmonicWheelSelector";
 import { FxRackPanel, type FxModuleConfig } from "./components/FxRackPanel";
 import { LibraryFolderSelector } from "./components/LibraryFolderSelector";
+import {
+  TrackUploadPanel,
+  type AnalyzedTrackSummary,
+} from "./components/TrackUploadPanel";
+import { TrackLibraryList } from "./components/TrackLibraryList";
 
 function createWaveform(seed: number, length = 256) {
   const buffer = new Float32Array(length);
@@ -129,7 +134,70 @@ export default function App() {
   const [masterTempo, setMasterTempo] = useState(128);
   const [masterPitch, setMasterPitch] = useState(0);
   const [selectedFolder, setSelectedFolder] = useState<string>(LIBRARY_FOLDERS[0]);
+  const [libraryTracks, setLibraryTracks] = useState<AnalyzedTrackSummary[]>([]);
   const loopTimers = useRef<Map<string, number>>(new Map());
+
+  const handleTracksAnalyzed = (tracks: AnalyzedTrackSummary[]) => {
+    if (!tracks.length) return;
+    setLibraryTracks((prev) => {
+      const merged = new Map<string, AnalyzedTrackSummary>();
+      prev.forEach((item) => {
+        merged.set(item.origin, item);
+      });
+      tracks.forEach((item) => {
+        merged.set(item.origin, item);
+      });
+      return Array.from(merged.values()).sort((a, b) => a.name.localeCompare(b.name));
+    });
+  };
+
+  const computeSeedFromName = (name: string) => {
+    const normalized = name.toLowerCase();
+    let hash = 0;
+    for (let index = 0; index < normalized.length; index += 1) {
+      hash = (hash * 33 + normalized.charCodeAt(index)) & 0xffffffff;
+    }
+    return Math.abs(hash % 2500) / 1000 + 0.3;
+  };
+
+  const handleFocusDeck = (deckId: DeckId) => {
+    setDecks((prev) => prev.map((deck) => ({ ...deck, isFocused: deck.id === deckId })));
+    const targets: Record<DeckId, CrossfadeState> = {
+      A: { x: 0, y: 0 },
+      B: { x: 1, y: 0 },
+      C: { x: 0, y: 1 },
+      D: { x: 1, y: 1 },
+    };
+    setCrossfade(targets[deckId]);
+  };
+
+  const handleLoadTrackToDeck = (deckId: DeckId, track: AnalyzedTrackSummary) => {
+    const waveformSeed = computeSeedFromName(track.name);
+    setDecks((prev) =>
+      prev.map((deck) =>
+        deck.id === deckId
+          ? {
+              ...deck,
+              loopName: track.name,
+              waveform: createWaveform(waveformSeed),
+              bpm: track.bpm,
+              scale: track.scale,
+              source: track.origin,
+              stems: track.stems.map((stem) => ({
+                id: `${track.id}-${stem.id}`,
+                label: stem.label,
+                status: "standby",
+              })),
+            }
+          : deck,
+      ),
+    );
+    setLoopSlots((prev) => ({
+      ...prev,
+      [deckId]: prev[deckId]?.map((slot) => ({ ...slot, status: "idle" })) ?? createLoopSlots(deckId),
+    }));
+    handleFocusDeck(deckId);
+  };
 
   useEffect(() => {
     const timer = setInterval(() => {
@@ -197,17 +265,6 @@ export default function App() {
     });
   };
 
-  const handleFocusDeck = (deckId: DeckId) => {
-    setDecks((prev) => prev.map((deck) => ({ ...deck, isFocused: deck.id === deckId })));
-    const targets: Record<DeckId, CrossfadeState> = {
-      A: { x: 0, y: 0 },
-      B: { x: 1, y: 0 },
-      C: { x: 0, y: 1 },
-      D: { x: 1, y: 1 },
-    };
-    setCrossfade(targets[deckId]);
-  };
-
   const handleUpdateDeck = (deckId: DeckId, patch: Partial<DeckPerformance>) => {
     setDecks((prev) => prev.map((deck) => (deck.id === deckId ? { ...deck, ...patch } : deck)));
   };
@@ -260,6 +317,10 @@ export default function App() {
               value={selectedFolder}
               onChange={setSelectedFolder}
             />
+            <div style={{ display: "grid", gap: "16px", marginTop: "18px" }}>
+              <TrackUploadPanel onTracksAnalyzed={handleTracksAnalyzed} />
+              <TrackLibraryList tracks={libraryTracks} onLoad={handleLoadTrackToDeck} />
+            </div>
           </div>
         </div>
       </div>

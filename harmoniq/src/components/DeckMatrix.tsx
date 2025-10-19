@@ -15,6 +15,32 @@ export interface LoopSlot {
   length: "bar" | "half";
 }
 
+export type StemStatus = "standby" | "active" | "muted";
+
+export interface DeckStem {
+  id: string;
+  label: string;
+  status: StemStatus;
+}
+
+const STEM_BADGE_COLORS: Record<StemStatus, { background: string; border: string; text: string }> = {
+  standby: {
+    background: "rgba(21, 74, 98, 0.6)",
+    border: "rgba(103, 255, 230, 0.4)",
+    text: theme.button.primaryText,
+  },
+  active: {
+    background: "rgba(124, 84, 255, 0.5)",
+    border: "rgba(214, 189, 255, 0.6)",
+    text: theme.button.primaryText,
+  },
+  muted: {
+    background: "rgba(10, 32, 44, 0.7)",
+    border: "rgba(120, 203, 220, 0.25)",
+    text: theme.textMuted,
+  },
+};
+
 export interface DeckPerformance {
   id: DeckId;
   loopName: string;
@@ -25,6 +51,10 @@ export interface DeckPerformance {
   fxStack: string[];
   isFocused: boolean;
   level: number;
+  bpm?: number;
+  scale?: string;
+  stems?: DeckStem[];
+  source?: string;
 }
 
 export interface CrossfadeState {
@@ -752,8 +782,21 @@ export function DeckMatrix({
                   <div style={{ display: "grid", gap: "4px" }}>
                     <strong style={{ fontSize: "0.9rem" }}>Deck {deck.id}</strong>
                     <span style={{ fontSize: "0.7rem", color: theme.textMuted }}>{deck.loopName}</span>
+                    {deck.source ? (
+                      <span style={{ fontSize: "0.64rem", color: theme.button.primaryText }}>
+                        {deck.source}
+                      </span>
+                    ) : null}
                   </div>
                   <div style={{ textAlign: "right", display: "grid", gap: "4px" }}>
+                    {deck.bpm ? (
+                      <span style={{ fontSize: "0.67rem", color: theme.button.primaryText }}>
+                        {deck.bpm} BPM
+                      </span>
+                    ) : null}
+                    {deck.scale ? (
+                      <span style={{ fontSize: "0.67rem", color: theme.textMuted }}>Scale {deck.scale}</span>
+                    ) : null}
                     <span style={{ fontSize: "0.67rem", color: theme.textMuted }}>Zoom ×{deck.zoom.toFixed(2)}</span>
                     <span style={{ fontSize: "0.67rem", color: theme.textMuted }}>
                       Filter {Math.round(deck.filter * 100)}%
@@ -763,6 +806,30 @@ export function DeckMatrix({
                     </span>
                   </div>
                 </header>
+                {deck.stems && deck.stems.length ? (
+                  <div style={{ display: "flex", flexWrap: "wrap", gap: "8px" }}>
+                    {deck.stems.map((stem) => {
+                      const colors = STEM_BADGE_COLORS[stem.status];
+                      return (
+                        <span
+                          key={stem.id}
+                          style={{
+                            padding: "6px 10px",
+                            borderRadius: "999px",
+                            border: colors.border,
+                            background: colors.background,
+                            color: colors.text,
+                            fontSize: "0.64rem",
+                            letterSpacing: "0.08em",
+                            textTransform: "uppercase",
+                          }}
+                        >
+                          {stem.label} · {stem.status === "standby" ? "Standby" : stem.status === "active" ? "On" : "Muted"}
+                        </span>
+                      );
+                    })}
+                  </div>
+                ) : null}
                 <div
                   style={{
                     position: "relative",
