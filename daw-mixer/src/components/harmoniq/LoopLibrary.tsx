@@ -6,6 +6,7 @@ import type { DeckId } from "./DeckPanel";
 
 export type LoopLibraryProps = {
   loops: SampleClip[];
+  selectedKey?: string | null;
   onPreviewLoop?: (loopId: string) => void;
   onAssignToDeck?: (deckId: DeckId, loopId: string) => void;
 };
@@ -17,13 +18,31 @@ const containerStyle: CSSProperties = {
   padding: "12px 16px"
 };
 
-export function LoopLibrary({ loops, onPreviewLoop, onAssignToDeck }: LoopLibraryProps) {
+export function LoopLibrary({ loops, selectedKey, onPreviewLoop, onAssignToDeck }: LoopLibraryProps) {
   return (
     <section style={containerStyle}>
       <header style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
         <strong style={{ fontSize: "0.8rem", letterSpacing: "0.05em" }}>Loop Library</strong>
         <span style={{ fontSize: "0.7rem", color: theme.textMuted }}>{loops.length} items</span>
       </header>
+      {selectedKey && (
+        <div
+          style={{
+            display: "flex",
+            justifyContent: "space-between",
+            alignItems: "center",
+            fontSize: "0.68rem",
+            color: theme.textMuted
+          }}
+        >
+          <span>Filtering by key: {selectedKey}</span>
+          <span>
+            {loops.length > 0
+              ? "Ready for harmonic mixing"
+              : "Drop clips tagged with this key"}
+          </span>
+        </div>
+      )}
       <div style={{ display: "grid", gap: "10px", maxHeight: "260px", overflowY: "auto" }}>
         {loops.map((loop) => (
           <div
@@ -73,7 +92,11 @@ export function LoopLibrary({ loops, onPreviewLoop, onAssignToDeck }: LoopLibrar
               color: theme.textMuted
             }}
           >
-            Drop loops into your project to populate the performance library.
+            {selectedKey ? (
+              `No loops detected in the ${selectedKey} bin yet. Upload audio in that key or clear the filter to browse everything.`
+            ) : (
+              "Drop loops into your project to populate the performance library."
+            )}
           </div>
         )}
       </div>

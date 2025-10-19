@@ -23,6 +23,7 @@ import {
   toolbarButtonDisabledStyle,
   toolbarButtonStyle
 } from "./components/layout/styles";
+import { normalizeKeyForWheel } from "./harmoniq/keys";
 
 type FloatingPanel = "mixer" | "vst" | "sample";
 
@@ -92,6 +93,21 @@ function AppShell() {
   const handlePreviewLoop = useCallback((loopId: string) => {
     setSelectedSampleId(loopId);
   }, []);
+
+  const handleSelectKey = useCallback((key: string) => {
+    setSelectedKey((previous) => (previous === key ? null : key));
+  }, []);
+
+  const libraryLoops = useMemo(() => {
+    if (!selectedKey) {
+      return project.samples;
+    }
+    const normalizedSelected = normalizeKeyForWheel(selectedKey);
+    if (!normalizedSelected) {
+      return project.samples;
+    }
+    return project.samples.filter((sample) => normalizeKeyForWheel(sample.key) === normalizedSelected);
+  }, [project.samples, selectedKey]);
 
   const renderPanelContent = () => {
     if (!activePanel) return null;
@@ -237,10 +253,11 @@ function AppShell() {
             onChange={setCrossfaderPosition}
             onCueDeck={handleFocusDeck}
           />
-          <HarmonicWheel selectedKey={selectedKey} onSelectKey={setSelectedKey} />
+          <HarmonicWheel selectedKey={selectedKey} onSelectKey={handleSelectKey} />
         </div>
         <LoopLibrary
-          loops={project.samples}
+          loops={libraryLoops}
+          selectedKey={selectedKey}
           onPreviewLoop={handlePreviewLoop}
           onAssignToDeck={handleAssignFromLibrary}
         />
