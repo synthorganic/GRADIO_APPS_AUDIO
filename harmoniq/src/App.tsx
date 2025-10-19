@@ -1,26 +1,51 @@
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { theme } from "@daw/theme";
-import {
-  DeckMatrix,
-  type DeckPerformance,
-  type DeckId,
-  type CrossfadeState,
-  type LoopSlot,
-} from "./components/DeckMatrix";
+import { DeckMatrix } from "./components/DeckMatrix";
+import type { CrossfadeState, DeckId, DeckPerformance, LoopSlot, StemType } from "./types";
 import { HarmonicWheelSelector } from "./components/HarmonicWheelSelector";
 import { FxRackPanel, type FxModuleConfig } from "./components/FxRackPanel";
-import { LibraryFolderSelector } from "./components/LibraryFolderSelector";
+import { createWaveform } from "./shared/waveforms";
+import { useLoopLibrary } from "./state/LoopLibraryStore";
+import { TrackSelectionModal } from "./components/TrackSelectionModal";
 
-function createWaveform(seed: number, length = 256) {
-  const buffer = new Float32Array(length);
-  for (let index = 0; index < length; index += 1) {
-    const t = index / length;
-    const sine = Math.sin(2 * Math.PI * (seed + 1) * t);
-    const warp = Math.sin(2 * Math.PI * (seed * 0.35 + 0.5) * t * 2);
-    const value = Math.abs((sine + warp * 0.5) * (0.6 + 0.4 * Math.sin(t * Math.PI * seed)));
-    buffer[index] = Math.min(1, Math.max(0, value));
-  }
-  return buffer;
+const CAMELOT_ORDER = [
+  "1A",
+  "2A",
+  "3A",
+  "4A",
+  "5A",
+  "6A",
+  "7A",
+  "8A",
+  "9A",
+  "10A",
+  "11A",
+  "12A",
+  "1B",
+  "2B",
+  "3B",
+  "4B",
+  "5B",
+  "6B",
+  "7B",
+  "8B",
+  "9B",
+  "10B",
+  "11B",
+  "12B",
+];
+
+const CAMELOT_RANK = new Map(CAMELOT_ORDER.map((key, index) => [key, index]));
+
+function sortLoopsByCamelot<T extends { key: string }>(loops: T[]): T[] {
+  return [...loops].sort((a, b) => {
+    const rankA = CAMELOT_RANK.get(a.key) ?? Number.MAX_SAFE_INTEGER;
+    const rankB = CAMELOT_RANK.get(b.key) ?? Number.MAX_SAFE_INTEGER;
+    if (rankA === rankB) {
+      return a.key.localeCompare(b.key);
+    }
+    return rankA - rankB;
+  });
 }
 
 function clamp(value: number, min: number, max: number) {
@@ -38,6 +63,13 @@ const INITIAL_DECKS: DeckPerformance[] = [
     fxStack: ["Delay", "Filter", "Space"],
     isFocused: true,
     level: 0.68,
+    bpm: 124,
+    tonalKey: "8A",
+    mood: "Glasswave",
+    eqCuts: { highs: false, mids: false, lows: false },
+    activeStem: null,
+    queuedStem: null,
+    stemStatus: "main",
   },
   {
     id: "B",
@@ -49,6 +81,13 @@ const INITIAL_DECKS: DeckPerformance[] = [
     fxStack: ["Flange", "Drive"],
     isFocused: false,
     level: 0.72,
+    bpm: 128,
+    tonalKey: "2B",
+    mood: "Retrograde",
+    eqCuts: { highs: false, mids: false, lows: false },
+    activeStem: null,
+    queuedStem: null,
+    stemStatus: "main",
   },
   {
     id: "C",
@@ -60,6 +99,13 @@ const INITIAL_DECKS: DeckPerformance[] = [
     fxStack: ["Phase", "Ducker"],
     isFocused: false,
     level: 0.44,
+    bpm: 118,
+    tonalKey: "11B",
+    mood: "Azure",
+    eqCuts: { highs: false, mids: false, lows: false },
+    activeStem: null,
+    queuedStem: null,
+    stemStatus: "main",
   },
   {
     id: "D",
@@ -71,18 +117,18 @@ const INITIAL_DECKS: DeckPerformance[] = [
     fxStack: ["Reverb", "Crush"],
     isFocused: false,
     level: 0.58,
+    bpm: 122,
+    tonalKey: "5A",
+    mood: "Hypnotic",
+    eqCuts: { highs: false, mids: false, lows: false },
+    activeStem: null,
+    queuedStem: null,
+    stemStatus: "main",
   },
 ];
 
 function createLoopSlots(deckId: DeckId): LoopSlot[] {
-  const labels = [
-    "Clip 1",
-    "Clip 2",
-    "Clip 3",
-    "Clip 4",
-    "Clip 5",
-    "Clip 6",
-  ];
+  const labels = ["Clip 1", "Clip 2", "Clip 3", "Clip 4", "Clip 5", "Clip 6"];
   return labels.map((label, index) => ({
     id: `${deckId.toLowerCase()}-clip-${index + 1}`,
     label,
@@ -113,30 +159,26 @@ const FX_RACK_PRESETS: Record<"left" | "right", FxModuleConfig[]> = {
   ],
 };
 
-const LIBRARY_FOLDERS = [
-  "All Sessions",
-  "Aurora Drift",
-  "Midnight Transit",
-  "Pulse Archive",
-  "Custom Imports",
-];
-
 export default function App() {
+  const { loops: storedLoops, registerLoopLoad } = useLoopLibrary();
+
   const [decks, setDecks] = useState<DeckPerformance[]>(INITIAL_DECKS);
   const [crossfade, setCrossfade] = useState<CrossfadeState>({ x: 0.45, y: 0.35 });
   const [selectedKey, setSelectedKey] = useState("8A");
   const [loopSlots, setLoopSlots] = useState<Record<DeckId, LoopSlot[]>>(INITIAL_LOOP_SLOTS);
   const [masterTempo, setMasterTempo] = useState(128);
   const [masterPitch, setMasterPitch] = useState(0);
-  const [selectedFolder, setSelectedFolder] = useState<string>(LIBRARY_FOLDERS[0]);
+  const [selectorKey, setSelectorKey] = useState<string | null>(null);
   const loopTimers = useRef<Map<string, number>>(new Map());
 
   useEffect(() => {
     const timer = setInterval(() => {
       setDecks((prev) =>
         prev.map((deck) => {
+          const floor = 0.15;
+          const ceiling = 0.98;
           const jitter = (Math.random() - 0.5) * 0.12;
-          const nextLevel = clamp(deck.level + jitter, 0.15, 0.98);
+          const nextLevel = clamp(deck.level + jitter, floor, ceiling);
           return { ...deck, level: Number(nextLevel.toFixed(2)) };
         }),
       );
@@ -223,46 +265,160 @@ export default function App() {
     );
   };
 
+  const handleLoadLoop = (loopId: string) => {
+    const loop = storedLoops.find((item) => item.id === loopId);
+    if (!loop) return;
+    const focusedDeck = decks.find((deck) => deck.isFocused) ?? decks[0];
+    if (!focusedDeck) return;
+
+    setDecks((prev) =>
+      prev.map((deck) =>
+        deck.id === focusedDeck.id
+          ? {
+              ...deck,
+              loopName: loop.name,
+              waveform: loop.waveform,
+              bpm: loop.bpm,
+              tonalKey: loop.key,
+              mood: loop.mood,
+              filter: clamp(deck.filter + 0.05, 0, 1),
+              resonance: clamp(deck.resonance + 0.03, 0, 1),
+              zoom: 1,
+              activeStem: null,
+              queuedStem: null,
+              stemStatus: "main",
+            }
+          : deck,
+      ),
+    );
+    registerLoopLoad(loop.id, focusedDeck.id);
+    setSelectorKey(null);
+  };
+
+  const handleToggleEq = (deckId: DeckId, band: "highs" | "mids" | "lows") => {
+    setDecks((prev) =>
+      prev.map((deck) =>
+        deck.id === deckId
+          ? {
+              ...deck,
+              eqCuts: { ...deck.eqCuts, [band]: !deck.eqCuts[band] },
+            }
+          : deck,
+      ),
+    );
+  };
+
+  const handleTriggerStem = (deckId: DeckId, stem: StemType) => {
+    const deck = decks.find((item) => item.id === deckId);
+    if (!deck) return;
+    const isActive = deck.activeStem === stem && deck.stemStatus === "stem";
+    const targetStem: StemType | null = isActive ? null : stem;
+    const timerKey = `stem-${deckId}`;
+    clearLoopTimersForSlot(timerKey);
+
+    const bpm = deck.bpm ?? masterTempo;
+    const measureMs = Math.max(Math.round((60_000 / Math.max(bpm, 1)) * 4), 400);
+
+    setDecks((prev) =>
+      prev.map((item) =>
+        item.id === deckId
+          ? {
+              ...item,
+              stemStatus: "queued",
+              queuedStem: targetStem,
+              level: targetStem ? clamp(item.level * 0.4, 0.04, 0.4) : item.level,
+            }
+          : item,
+      ),
+    );
+
+    registerLoopTimer(timerKey, measureMs, () => {
+      setDecks((prev) =>
+        prev.map((item) => {
+          if (item.id !== deckId) return item;
+          const nextLevel = targetStem
+            ? clamp(Math.max(item.level, 0.62), 0, 1)
+            : clamp(Math.max(item.level, 0.45), 0, 1);
+          return {
+            ...item,
+            activeStem: targetStem,
+            queuedStem: null,
+            stemStatus: targetStem ? "stem" : "main",
+            level: nextLevel,
+          };
+        }),
+      );
+    });
+  };
+
+  const handleOpenKeySelector = (key: string) => {
+    setSelectedKey(key);
+    setSelectorKey(key);
+  };
+
+  const handleCloseSelector = () => {
+    setSelectorKey(null);
+  };
+
+  const sortedLoops = useMemo(() => sortLoopsByCamelot(storedLoops), [storedLoops]);
+
+  const selectionLoops = useMemo(
+    () =>
+      selectorKey
+        ? sortedLoops.filter((loop) => loop.key === selectorKey)
+        : [],
+    [selectorKey, sortedLoops],
+  );
+
   return (
-    <div className="harmoniq-shell">
-      <div
-        className="harmoniq-shell__frame"
-        style={{
-          color: theme.text,
-          filter: "drop-shadow(0 24px 80px rgba(0, 0, 0, 0.5))",
-        }}
-      >
-        <div className="harmoniq-shell__matrix">
-          <DeckMatrix
-            decks={decks}
-            crossfade={crossfade}
-            onCrossfadeChange={setCrossfade}
-            onUpdateDeck={handleUpdateDeck}
-            onNudge={handleNudge}
-            onFocusDeck={handleFocusDeck}
-            loopSlots={loopSlots}
-            onToggleLoopSlot={handleToggleLoopSlot}
-            masterTempo={masterTempo}
-            masterPitch={masterPitch}
-            onMasterTempoChange={setMasterTempo}
-            onMasterPitchChange={setMasterPitch}
-          />
-        </div>
-        <div className="harmoniq-shell__wheel">
-          <div className="harmoniq-shell__wheel-layout">
-            <FxRackPanel title="FX Bank Alpha" modules={FX_RACK_PRESETS.left} alignment="left" />
-            <HarmonicWheelSelector value={selectedKey} onChange={setSelectedKey} />
-            <FxRackPanel title="FX Bank Omega" modules={FX_RACK_PRESETS.right} alignment="right" />
-          </div>
-          <div className="harmoniq-shell__library">
-            <LibraryFolderSelector
-              folders={LIBRARY_FOLDERS}
-              value={selectedFolder}
-              onChange={setSelectedFolder}
+    <>
+      <div className="harmoniq-shell">
+        <div
+          className="harmoniq-shell__frame"
+          style={{
+            color: theme.text,
+            filter: "drop-shadow(0 24px 80px rgba(0, 0, 0, 0.5))",
+          }}
+        >
+          <div className="harmoniq-shell__matrix">
+            <DeckMatrix
+              decks={decks}
+              crossfade={crossfade}
+              onCrossfadeChange={setCrossfade}
+              onUpdateDeck={handleUpdateDeck}
+              onNudge={handleNudge}
+              onFocusDeck={handleFocusDeck}
+              loopSlots={loopSlots}
+              onToggleLoopSlot={handleToggleLoopSlot}
+              masterTempo={masterTempo}
+              masterPitch={masterPitch}
+              onMasterTempoChange={setMasterTempo}
+              onMasterPitchChange={setMasterPitch}
+              onToggleEq={handleToggleEq}
+              onTriggerStem={handleTriggerStem}
             />
+          </div>
+          <div className="harmoniq-shell__wheel">
+            <div className="harmoniq-shell__wheel-layout">
+              <FxRackPanel title="FX Bank Alpha" modules={FX_RACK_PRESETS.left} alignment="left" />
+              <HarmonicWheelSelector
+                value={selectedKey}
+                onChange={setSelectedKey}
+                onOpenKey={handleOpenKeySelector}
+              />
+              <FxRackPanel title="FX Bank Omega" modules={FX_RACK_PRESETS.right} alignment="right" />
+            </div>
           </div>
         </div>
       </div>
-    </div>
+      {selectorKey && (
+        <TrackSelectionModal
+          keyLabel={selectorKey}
+          loops={selectionLoops}
+          onClose={handleCloseSelector}
+          onLoadLoop={handleLoadLoop}
+        />
+      )}
+    </>
   );
 }
