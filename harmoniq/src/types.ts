@@ -9,6 +9,14 @@ export interface LoopSlot {
   length: "bar" | "half";
 }
 
+export type StemStatus = "standby" | "active" | "muted";
+
+export interface DeckStem {
+  id: string;
+  label: string;
+  status: StemStatus;
+}
+
 export interface DeckPerformance {
   id: DeckId;
   loopName: string;
@@ -26,6 +34,9 @@ export interface DeckPerformance {
   activeStem: StemType | null;
   queuedStem: StemType | null;
   stemStatus: "main" | "queued" | "stem";
+  stems?: DeckStem[];
+  source?: string;
+  scale?: string;
 }
 
 export interface CrossfadeState {

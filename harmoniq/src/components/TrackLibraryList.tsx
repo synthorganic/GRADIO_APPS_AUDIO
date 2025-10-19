@@ -1,5 +1,5 @@
 import { theme } from "@daw/theme";
-import type { DeckId } from "./DeckMatrix";
+import type { DeckId } from "../types";
 import type { AnalyzedTrackSummary } from "./TrackUploadPanel";
 
 export interface TrackLibraryListProps {
