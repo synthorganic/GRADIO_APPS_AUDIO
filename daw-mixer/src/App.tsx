@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useMemo, useState, type CSSProperties } from "react";
 import { ProjectProvider, useProjectStore, type PreferencesUpdate } from "./state/ProjectStore";
+import { HarmoniqProvider } from "./harmoniq/state";
 import { ProjectNavigator } from "./components/ProjectNavigator";
 import { Timeline } from "./components/Timeline";
 import { MasterControls } from "./components/MasterControls";
@@ -245,7 +246,9 @@ const toolbarButtonStyle: CSSProperties = {
 export default function App() {
   return (
     <ProjectProvider>
-      <AppShell />
+      <HarmoniqProvider>
+        <AppShell />
+      </HarmoniqProvider>
     </ProjectProvider>
   );
 }
