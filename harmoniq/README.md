@@ -1,6 +1,6 @@
 # Harmoniq Workstation Prototype
 
-Harmoniq is a browser-based loop performance surface that shares theme, layout, and state patterns with the `daw-mixer` reference experience in this repository. The app now persists loop libraries and automation envelopes locally, and can export/import JSON snapshots for filesystem hand-off.
+Harmoniq is a browser-based loop performance surface that shares theme, layout, and state patterns with the `daw-mixer` reference experience in this repository. The app persists loop libraries locally so Camelot-key track selection stays hydrated, and envelope fades are driven directly by deck button press lengths (hold Play for fade-in, hold Stop for fade-out).
 
 ## Getting started
 
@@ -26,8 +26,8 @@ Harmoniq is a browser-based loop performance surface that shares theme, layout, 
 ## State persistence model
 
 - The `LoopLibraryProvider` in `src/state/LoopLibraryStore.tsx` mirrors the reducer/context structure used by `daw-mixer`’s `ProjectStore`. It loads from `localStorage` on boot, hydrates `Float32Array` waveforms, and writes back on every state transition with graceful error handling.
-- The provider exposes `exportToFile`/`importFromFile` helpers. When the File System Access API is available the user gets a native save dialog; otherwise a JSON download is triggered. The exported payload matches the stored reducer state so it can be checked into source control or transferred between machines.
-- Loop assignments and automation envelopes remain linked through shared IDs. Registering a loop load automatically increments usage counters so recently auditioned content floats to the top of the library UI.
+- The provider exposes `exportToFile`/`importFromFile` helpers for engineering workflows. When the File System Access API is available the user gets a native save dialog; otherwise a JSON download is triggered. The exported payload mirrors the stored reducer state so it can be checked into source control or transferred between machines when needed.
+- Loop assignments and automation envelopes remain linked through shared IDs. Deck controls now shape automation automatically—holding Play triggers a fade-in, holding Stop triggers a fade-out—so there is no separate envelope editor surface to manage.
 
 ## Migrating shared code
 
@@ -55,7 +55,7 @@ Harmoniq currently relies on repository-wide harnesses:
   ```bash
   pytest
   ```
-- **Front-end unit and interaction tests** should be authored with [Vitest](https://vitest.dev/) using the existing Vite toolchain. Add a `"test": "vitest"` npm script and install `vitest`/`@testing-library/react` to exercise component render flows (Deck matrix focus logic, loop library persistence, etc.).
+- **Front-end unit and interaction tests** should be authored with [Vitest](https://vitest.dev/) using the existing Vite toolchain. Add a `"test": "vitest"` npm script and install `vitest`/`@testing-library/react` to exercise component render flows (Deck matrix focus logic, loop scheduling, key-sorted track selection, etc.).
 - **Integration smoke tests** can mount the Harmoniq bundle inside Playwright or Cypress if you need end-to-end verification. Reuse the reducer fixtures from `LoopLibraryStore` to seed predictable scenarios.
 
 Document newly added tests alongside the components they target so that QA can map coverage quickly. The shared reducer design makes it straightforward to port existing `ProjectStore` test cases into Harmoniq by swapping the action payloads.

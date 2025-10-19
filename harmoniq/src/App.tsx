@@ -525,6 +525,17 @@ export default function App() {
               </div>
             </div>
           </div>
+          <div className="harmoniq-shell__wheel">
+            <div className="harmoniq-shell__wheel-layout">
+              <FxRackPanel title="FX Bank Alpha" modules={FX_RACK_PRESETS.left} alignment="left" />
+              <HarmonicWheelSelector
+                value={selectedKey}
+                onChange={setSelectedKey}
+                onOpenKey={handleOpenKeySelector}
+              />
+              <FxRackPanel title="FX Bank Omega" modules={FX_RACK_PRESETS.right} alignment="right" />
+            </div>
+          </div>
         </div>
       </div>
       </div>
