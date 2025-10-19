@@ -1,0 +1,45 @@
+:root {
+  font-family: "Inter", "Segoe UI", system-ui, -apple-system, BlinkMacSystemFont, "Helvetica Neue", sans-serif;
+  color-scheme: dark;
+  background: radial-gradient(circle at top, #ff5f8d 0%, #3b1b5d 35%, #081622 80%);
+  min-height: 100%;
+}
+
+body {
+  margin: 0;
+  min-height: 100vh;
+  background: radial-gradient(circle at top, rgba(255, 95, 141, 0.6) 0%, rgba(59, 27, 93, 0.75) 35%, rgba(8, 22, 34, 0.95) 80%),
+    linear-gradient(180deg, rgba(9, 18, 32, 0.95) 0%, rgba(4, 12, 20, 0.98) 100%);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 40px;
+  box-sizing: border-box;
+}
+
+#root {
+  width: min(1200px, 100%);
+}
+
+* {
+  box-sizing: border-box;
+}
+
+button {
+  font-family: inherit;
+}
+
+@keyframes clipPulse {
+  0% {
+    box-shadow: 0 0 0 0 rgba(241, 139, 180, 0.65);
+    opacity: 1;
+  }
+  70% {
+    box-shadow: 0 0 0 14px rgba(241, 139, 180, 0);
+    opacity: 0.55;
+  }
+  100% {
+    box-shadow: 0 0 0 0 rgba(241, 139, 180, 0);
+    opacity: 0.4;
+  }
+}
