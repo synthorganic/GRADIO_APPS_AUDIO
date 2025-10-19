@@ -1,8 +1,7 @@
 import type { CSSProperties } from "react";
 import { theme } from "../../theme";
 import { cardSurfaceStyle, toolbarButtonStyle } from "../layout/styles";
-
-const HARMONIC_KEYS = ["C", "G", "D", "A", "E", "B", "F#", "Db", "Ab", "Eb", "Bb", "F"];
+import { HARMONIC_WHEEL_KEYS } from "../../harmoniq/keys";
 
 export type HarmonicWheelProps = {
   selectedKey?: string | null;
@@ -32,7 +31,7 @@ export function HarmonicWheel({ selectedKey, onSelectKey }: HarmonicWheelProps) 
           fontSize: "0.75rem"
         }}
       >
-        {HARMONIC_KEYS.map((key) => {
+        {HARMONIC_WHEEL_KEYS.map((key) => {
           const isActive = selectedKey === key;
           return (
             <button

@@ -377,100 +377,45 @@ export function ProjectNavigator({ selectedSampleId, onSelectSample }: ProjectNa
       style={{
         flex: 1,
         overflow: "hidden",
-        padding: "12px 16px",
+        padding: "12px 16px 16px",
         display: "flex",
         flexDirection: "column",
-          gap: "14px",
+        gap: "12px",
         background: theme.surface,
         borderBottom: `1px solid ${theme.divider}`,
-        color: theme.text
+        color: theme.text,
+        position: "relative"
       }}
     >
-      <section
+      <header
         style={{
-          padding: "14px",
-          border: `1px dashed ${theme.button.outline}`,
-          borderRadius: "10px",
-          textAlign: "center",
-          background: theme.surfaceOverlay,
-          color: theme.textMuted,
-          position: "relative",
-          boxShadow: theme.cardGlow
-        }}
-        onDragOver={(event) => {
-          event.preventDefault();
-          event.dataTransfer.dropEffect = "copy";
-        }}
-        onDrop={(event) => {
-          event.preventDefault();
-          void addSamples(event.dataTransfer.files);
+          display: "flex",
+          flexDirection: "column",
+          gap: "8px",
+          minHeight: 0,
+          flex: 1
         }}
       >
-        <input
-          ref={inputRef}
-          type="file"
-          accept="audio/*"
-          multiple
-          style={{ display: "none" }}
-          onChange={handleFileInput}
-        />
-        <p style={{ margin: "0 0 8px", fontWeight: 600, letterSpacing: "0.04em", color: theme.text, fontSize: "0.75rem" }}>
-          Drop audio or browse to start a technicolor session
-        </p>
-        <button
-          type="button"
-          onClick={() => inputRef.current?.click()}
+        <h2
           style={{
-            border: `1px solid ${theme.button.outline}`,
-            background: theme.button.primary,
-            color: theme.button.primaryText,
-            padding: "8px 16px",
-            borderRadius: "999px",
-            fontWeight: 600,
-            fontSize: "0.7rem",
-            cursor: "pointer",
-            boxShadow: theme.cardGlow
+            margin: 0,
+            fontSize: "0.75rem",
+            letterSpacing: "0.06em",
+            color: theme.text,
+            textTransform: "uppercase"
           }}
         >
-          Select audio
-        </button>
-        <p style={{ margin: "10px 0 0", fontSize: "0.72rem", color: theme.textMuted }}>
-          Samples auto-stretch to {project.masterBpm} BPM. DEMUCS will unfold stems on demand.
-        </p>
-        {isProcessing && (
-          <span
-            style={{
-              position: "absolute",
-              top: "12px",
-              right: "14px",
-              fontSize: "0.65rem",
-              color: theme.button.primary
-            }}
-          >
-            Separating stems…
-          </span>
-        )}
-      </section>
+          Project navigator
+        </h2>
 
-      <h2
-        style={{
-          margin: 0,
-          fontSize: "0.75rem",
-          letterSpacing: "0.06em",
-          color: theme.text,
-          textTransform: "uppercase"
-        }}
-      >
-        Project navigator
-      </h2>
-
-      <div
-        style={{
-          flex: 1,
-          overflowY: "auto",
-          padding: "0 4px 8px 0"
-        }}
-      >
+        <div
+          style={{
+            flex: 1,
+            minHeight: 0,
+            overflowY: "auto",
+            padding: "0 4px 8px 0"
+          }}
+        >
         <ul
           style={{
             listStyle: "none",
@@ -1134,7 +1079,84 @@ export function ProjectNavigator({ selectedSampleId, onSelectSample }: ProjectNa
             );
           })}
         </ul>
-      </div>
+        </div>
+      </header>
+
+      <section
+        style={{
+          padding: "14px",
+          border: `1px dashed ${theme.button.outline}`,
+          borderRadius: "10px",
+          textAlign: "center",
+          background: theme.surfaceOverlay,
+          color: theme.textMuted,
+          position: "sticky",
+          bottom: 0,
+          boxShadow: theme.cardGlow,
+          zIndex: 1
+        }}
+        onDragOver={(event) => {
+          event.preventDefault();
+          event.dataTransfer.dropEffect = "copy";
+        }}
+        onDrop={(event) => {
+          event.preventDefault();
+          void addSamples(event.dataTransfer.files);
+        }}
+      >
+        <input
+          ref={inputRef}
+          type="file"
+          accept="audio/*"
+          multiple
+          style={{ display: "none" }}
+          onChange={handleFileInput}
+        />
+        <p
+          style={{
+            margin: "0 0 8px",
+            fontWeight: 600,
+            letterSpacing: "0.04em",
+            color: theme.text,
+            fontSize: "0.75rem"
+          }}
+        >
+          Drop audio or browse to start a technicolor session
+        </p>
+        <button
+          type="button"
+          onClick={() => inputRef.current?.click()}
+          style={{
+            border: `1px solid ${theme.button.outline}`,
+            background: theme.button.primary,
+            color: theme.button.primaryText,
+            padding: "8px 16px",
+            borderRadius: "999px",
+            fontWeight: 600,
+            fontSize: "0.7rem",
+            cursor: "pointer",
+            boxShadow: theme.cardGlow
+          }}
+        >
+          Select audio
+        </button>
+        <p style={{ margin: "10px 0 0", fontSize: "0.72rem", color: theme.textMuted }}>
+          Samples auto-stretch to {project.masterBpm} BPM. DEMUCS will unfold stems on demand.
+        </p>
+        {isProcessing && (
+          <span
+            style={{
+              position: "absolute",
+              top: "12px",
+              right: "14px",
+              fontSize: "0.65rem",
+              color: theme.button.primary
+            }}
+          >
+            Separating stems…
+          </span>
+        )}
+      </section>
 
       {hoverCard && typeof window !== "undefined" && (() => {
         const cardWidth = 280;
