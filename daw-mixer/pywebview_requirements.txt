@@ -1,0 +1,2 @@
+# Dependencies required to package the Soniq PyWebview executable
+pywebview>=4.4

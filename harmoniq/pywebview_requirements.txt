@@ -1,0 +1,2 @@
+# Dependencies required to package the Harmoniq PyWebview executable
+pywebview>=4.4

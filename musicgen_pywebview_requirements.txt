@@ -1,0 +1,3 @@
+# Dependencies required to package the MusicGen PyWebview executable
+pywebview>=4.4
+gradio>=3.50
