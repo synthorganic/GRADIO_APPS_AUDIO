@@ -4,17 +4,11 @@ import { DeckMatrix } from "./components/DeckMatrix";
 import type { CrossfadeState, DeckId, DeckPerformance, LoopSlot, StemType } from "./types";
 import { HarmonicWheelSelector } from "./components/HarmonicWheelSelector";
 import { FxRackPanel, type FxModuleConfig } from "./components/FxRackPanel";
-import { LibraryFolderSelector } from "./components/LibraryFolderSelector";
-import { SavedLoopsLibrary } from "./components/SavedLoopsLibrary";
-import { ActiveLoopsPanel } from "./components/ActiveLoopsPanel";
-import {
-  AutomationEnvelopeList,
-  type AutomationEnvelopeSummary,
-} from "./components/AutomationEnvelopeList";
 import { createWaveform } from "./shared/waveforms";
 import { useLoopLibrary } from "./state/LoopLibraryStore";
 import { TrackSelectionModal } from "./components/TrackSelectionModal";
-import type { AnalyzedTrackSummary } from "./components/TrackUploadPanel";
+import { TrackUploadPanel, type AnalyzedTrackSummary } from "./components/TrackUploadPanel";
+import { TrackLibraryList } from "./components/TrackLibraryList";
 
 const CAMELOT_ORDER = [
   "1A",
@@ -168,16 +162,7 @@ const FX_RACK_PRESETS: Record<"left" | "right", FxModuleConfig[]> = {
 };
 
 export default function App() {
-  const {
-    loops: storedLoops,
-    automationEnvelopes,
-    folders,
-    registerLoopLoad,
-    exportToFile,
-    importFromFile,
-    lastPersistedAt,
-    persistError,
-  } = useLoopLibrary();
+  const { loops: storedLoops, registerLoopLoad } = useLoopLibrary();
 
   const [decks, setDecks] = useState<DeckPerformance[]>(INITIAL_DECKS);
   const [crossfade, setCrossfade] = useState<CrossfadeState>({ x: 0.45, y: 0.35 });
@@ -185,13 +170,6 @@ export default function App() {
   const [loopSlots, setLoopSlots] = useState<Record<DeckId, LoopSlot[]>>(INITIAL_LOOP_SLOTS);
   const [masterTempo, setMasterTempo] = useState(128);
   const [masterPitch, setMasterPitch] = useState(0);
-  const [selectedFolder, setSelectedFolder] = useState<string>(() => folders[0] ?? "All Sessions");
-  const [mutedDecks, setMutedDecks] = useState<Record<DeckId, boolean>>({
-    A: false,
-    B: false,
-    C: false,
-    D: false,
-  });
   const [selectorKey, setSelectorKey] = useState<string | null>(null);
   const [libraryTracks, setLibraryTracks] = useState<AnalyzedTrackSummary[]>([]);
   const loopTimers = useRef<Map<string, number>>(new Map());
@@ -240,6 +218,7 @@ export default function App() {
               loopName: track.name,
               waveform: createWaveform(waveformSeed),
               bpm: track.bpm,
+              tonalKey: track.scale,
               scale: track.scale,
               source: track.origin,
               stems: track.stems.map((stem) => ({
@@ -259,25 +238,19 @@ export default function App() {
   };
 
   useEffect(() => {
-    if (folders.length === 0) return;
-    setSelectedFolder((prev) => (folders.includes(prev) ? prev : folders[0]));
-  }, [folders]);
-
-  useEffect(() => {
     const timer = setInterval(() => {
       setDecks((prev) =>
         prev.map((deck) => {
-          const isMuted = mutedDecks[deck.id] ?? false;
-          const floor = isMuted ? 0.02 : 0.15;
-          const ceiling = isMuted ? 0.12 : 0.98;
-          const jitter = (Math.random() - 0.5) * (isMuted ? 0.04 : 0.12);
+          const floor = 0.15;
+          const ceiling = 0.98;
+          const jitter = (Math.random() - 0.5) * 0.12;
           const nextLevel = clamp(deck.level + jitter, floor, ceiling);
           return { ...deck, level: Number(nextLevel.toFixed(2)) };
         }),
       );
     }, 1300);
     return () => clearInterval(timer);
-  }, [mutedDecks]);
+  }, []);
 
   useEffect(() => {
     return () => {
@@ -347,31 +320,12 @@ export default function App() {
     );
   };
 
-  const handleToggleMute = (loopId: string) => {
-    const deckId = loopId as DeckId;
-    setMutedDecks((prev) => {
-      const next = { ...prev, [deckId]: !prev[deckId] };
-      setDecks((current) =>
-        current.map((deck) =>
-          deck.id === deckId
-            ? {
-                ...deck,
-                level: next[deckId] ? 0.05 : Math.max(deck.level, 0.35),
-              }
-            : deck,
-        ),
-      );
-      return next;
-    });
-  };
-
   const handleLoadLoop = (loopId: string) => {
     const loop = storedLoops.find((item) => item.id === loopId);
     if (!loop) return;
     const focusedDeck = decks.find((deck) => deck.isFocused) ?? decks[0];
     if (!focusedDeck) return;
 
-    setMutedDecks((prev) => ({ ...prev, [focusedDeck.id]: false }));
     setDecks((prev) =>
       prev.map((deck) =>
         deck.id === focusedDeck.id
@@ -463,26 +417,6 @@ export default function App() {
 
   const sortedLoops = useMemo(() => sortLoopsByCamelot(storedLoops), [storedLoops]);
 
-  const filteredLoops = useMemo(() => {
-    if (selectedFolder === "All Sessions") {
-      return sortedLoops;
-    }
-    return sortedLoops.filter((loop) => loop.folder === selectedFolder);
-  }, [sortedLoops, selectedFolder]);
-
-  const savedLoopPreview = useMemo(
-    () =>
-      filteredLoops.map((loop) => ({
-        id: loop.id,
-        name: loop.name,
-        bpm: loop.bpm,
-        key: loop.key,
-        waveform: loop.waveform,
-        mood: loop.mood,
-      })),
-    [filteredLoops],
-  );
-
   const selectionLoops = useMemo(
     () =>
       selectorKey
@@ -490,34 +424,6 @@ export default function App() {
         : [],
     [selectorKey, sortedLoops],
   );
-
-  const activeLoops = useMemo(() =>
-    decks.map((deck) => ({
-      id: deck.id,
-      name: deck.activeStem ? `${deck.loopName} (${deck.activeStem.toUpperCase()} Stem)` : deck.loopName,
-      bpm: deck.bpm ?? masterTempo,
-      key: deck.tonalKey ?? selectedKey,
-      deck: deck.id,
-      waveform: deck.waveform,
-      energy: clamp(deck.level + 0.18, 0, 1),
-      filter: deck.filter,
-      level: deck.level,
-      isMuted: mutedDecks[deck.id] ?? false,
-    })),
-  [decks, masterTempo, selectedKey, mutedDecks]);
-
-  const envelopeSummaries = useMemo<AutomationEnvelopeSummary[]>(
-    () =>
-      automationEnvelopes.map((envelope) => ({
-        ...envelope,
-        linkedLoops: storedLoops.filter((loop) => loop.automationIds.includes(envelope.id)),
-      })),
-    [automationEnvelopes, storedLoops],
-  );
-
-  const handleImportLibrary = async (file: File) => {
-    await importFromFile(file);
-  };
 
   return (
     <>
@@ -527,56 +433,25 @@ export default function App() {
           style={{
             color: theme.text,
             filter: "drop-shadow(0 24px 80px rgba(0, 0, 0, 0.5))",
-        }}
-      >
-        <div className="harmoniq-shell__matrix">
-          <DeckMatrix
-            decks={decks}
-            crossfade={crossfade}
-            onCrossfadeChange={setCrossfade}
-            onUpdateDeck={handleUpdateDeck}
-            onNudge={handleNudge}
-            onFocusDeck={handleFocusDeck}
-            loopSlots={loopSlots}
-            onToggleLoopSlot={handleToggleLoopSlot}
-            masterTempo={masterTempo}
-            masterPitch={masterPitch}
-            onMasterTempoChange={setMasterTempo}
-            onMasterPitchChange={setMasterPitch}
-            onToggleEq={handleToggleEq}
-            onTriggerStem={handleTriggerStem}
-          />
-        </div>
-        <div className="harmoniq-shell__wheel">
-          <div className="harmoniq-shell__wheel-layout">
-            <FxRackPanel title="FX Bank Alpha" modules={FX_RACK_PRESETS.left} alignment="left" />
-            <HarmonicWheelSelector
-              value={selectedKey}
-              onChange={setSelectedKey}
-              onOpenKey={handleOpenKeySelector}
+          }}
+        >
+          <div className="harmoniq-shell__matrix">
+            <DeckMatrix
+              decks={decks}
+              crossfade={crossfade}
+              onCrossfadeChange={setCrossfade}
+              onUpdateDeck={handleUpdateDeck}
+              onNudge={handleNudge}
+              onFocusDeck={handleFocusDeck}
+              loopSlots={loopSlots}
+              onToggleLoopSlot={handleToggleLoopSlot}
+              masterTempo={masterTempo}
+              masterPitch={masterPitch}
+              onMasterTempoChange={setMasterTempo}
+              onMasterPitchChange={setMasterPitch}
+              onToggleEq={handleToggleEq}
+              onTriggerStem={handleTriggerStem}
             />
-            <FxRackPanel title="FX Bank Omega" modules={FX_RACK_PRESETS.right} alignment="right" />
-          </div>
-          <div className="harmoniq-shell__library">
-            <div className="harmoniq-shell__library-content">
-              <LibraryFolderSelector folders={folders} value={selectedFolder} onChange={setSelectedFolder} />
-              <div className="harmoniq-shell__library-columns">
-                <ActiveLoopsPanel
-                  loops={activeLoops}
-                  onToggleMute={handleToggleMute}
-                  onFocusDeck={handleFocusDeck}
-                  highlightKey={selectedKey}
-                />
-                <SavedLoopsLibrary loops={savedLoopPreview} onLoadLoop={handleLoadLoop} />
-                <AutomationEnvelopeList
-                  envelopes={envelopeSummaries}
-                  onExport={exportToFile}
-                  onImport={handleImportLibrary}
-                  lastPersistedAt={lastPersistedAt}
-                  persistError={persistError}
-                />
-              </div>
-            </div>
           </div>
           <div className="harmoniq-shell__wheel">
             <div className="harmoniq-shell__wheel-layout">
@@ -588,9 +463,16 @@ export default function App() {
               />
               <FxRackPanel title="FX Bank Omega" modules={FX_RACK_PRESETS.right} alignment="right" />
             </div>
+            <div className="harmoniq-shell__library">
+              <div className="harmoniq-shell__library-content">
+                <div className="harmoniq-shell__library-upper">
+                  <TrackUploadPanel onTracksAnalyzed={handleTracksAnalyzed} />
+                  <TrackLibraryList tracks={libraryTracks} onLoad={handleLoadTrackToDeck} />
+                </div>
+              </div>
+            </div>
           </div>
         </div>
-      </div>
       </div>
       {selectorKey && (
         <TrackSelectionModal
