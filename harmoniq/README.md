@@ -59,3 +59,22 @@ Harmoniq currently relies on repository-wide harnesses:
 - **Integration smoke tests** can mount the Harmoniq bundle inside Playwright or Cypress if you need end-to-end verification. Reuse the reducer fixtures from `LoopLibraryStore` to seed predictable scenarios.
 
 Document newly added tests alongside the components they target so that QA can map coverage quickly. The shared reducer design makes it straightforward to port existing `ProjectStore` test cases into Harmoniq by swapping the action payloads.
+
+## Packaging as a PyWebview executable
+
+The repository includes a helper script, `build_harmoniq_pywebview.bat`, that
+produces a Windows executable bundling the Harmoniq production build inside a
+PyWebview shell.
+
+1. Install Node.js (18+) and Python 3.10+ on the build machine.
+2. Run the batch file from the repository root using an elevated developer
+   command prompt:
+
+   ```bat
+   build_harmoniq_pywebview.bat
+   ```
+
+The script installs npm dependencies, compiles the Vite bundle, provisions a
+local Python virtual environment, and invokes the `exe_compiler` helper to run
+PyInstaller. The final executable is placed in
+`build\\harmoniq_pywebview\\compiler\\dist\\Harmoniq.exe`.
