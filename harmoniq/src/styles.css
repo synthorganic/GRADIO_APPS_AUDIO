@@ -69,10 +69,11 @@ button {
   gap: 20px;
 }
 
-.harmoniq-shell__library-columns {
+.harmoniq-shell__library-upper {
   display: grid;
   gap: 20px;
-  grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
+  grid-template-columns: minmax(260px, 320px) minmax(0, 1fr);
+  align-items: start;
 }
 
 .harmoniq-shell__wheel-layout {
@@ -99,8 +100,8 @@ button {
     grid-template-columns: minmax(200px, 1fr) minmax(520px, 2fr) minmax(200px, 1fr);
   }
 
-  .harmoniq-shell__library-columns {
-    grid-template-columns: repeat(auto-fit, minmax(260px, 1fr));
+  .harmoniq-shell__library-upper {
+    grid-template-columns: minmax(0, 1fr);
   }
 }
 
@@ -127,8 +128,7 @@ button {
   .harmoniq-shell__wheel-layout > :nth-child(2) {
     justify-self: stretch;
   }
-
-  .harmoniq-shell__library-columns {
+  .harmoniq-shell__library-upper {
     grid-template-columns: minmax(0, 1fr);
   }
 }

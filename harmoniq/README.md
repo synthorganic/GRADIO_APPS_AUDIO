@@ -1,6 +1,6 @@
 # Harmoniq Workstation Prototype
 
-Harmoniq is a browser-based loop performance surface that shares theme, layout, and state patterns with the `daw-mixer` reference experience in this repository. The app persists loop libraries locally so Camelot-key track selection stays hydrated, and envelope fades are driven directly by deck button press lengths (hold Play for fade-in, hold Stop for fade-out).
+Harmoniq is a browser-based loop performance surface that shares theme, layout, and state patterns with the `daw-mixer` reference experience in this repository. The app persists loop libraries locally so Camelot-key track selection stays hydrated and keeps uploaded tracks ready for deck assignment. The lower library strip now focuses purely on the upload panel and analyzed track list—automation envelopes, active deck dashboards, and saved loop folders have been retired to keep the workflow lean.
 
 ## Getting started
 
@@ -27,7 +27,7 @@ Harmoniq is a browser-based loop performance surface that shares theme, layout, 
 
 - The `LoopLibraryProvider` in `src/state/LoopLibraryStore.tsx` mirrors the reducer/context structure used by `daw-mixer`’s `ProjectStore`. It loads from `localStorage` on boot, hydrates `Float32Array` waveforms, and writes back on every state transition with graceful error handling.
 - The provider exposes `exportToFile`/`importFromFile` helpers for engineering workflows. When the File System Access API is available the user gets a native save dialog; otherwise a JSON download is triggered. The exported payload mirrors the stored reducer state so it can be checked into source control or transferred between machines when needed.
-- Loop assignments and automation envelopes remain linked through shared IDs. Deck controls now shape automation automatically—holding Play triggers a fade-in, holding Stop triggers a fade-out—so there is no separate envelope editor surface to manage.
+- Track uploads are merged into the local library as they are analyzed so every Camelot key remains populated without juggling additional management panels.
 
 ## Migrating shared code
 
