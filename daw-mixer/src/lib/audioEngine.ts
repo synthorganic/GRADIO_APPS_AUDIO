@@ -31,6 +31,14 @@ interface PlaybackOptions {
   loop?: boolean;
 }
 
+interface TransportState {
+  isPlaying: boolean;
+  bpm: number;
+  timelineOffset: number;
+  position: number | null;
+  playbackDuration: number;
+}
+
 export class AudioEngine {
   private context = new AudioContext();
   private gainNode = this.context.createGain();
@@ -619,6 +627,16 @@ export class AudioEngine {
     if (this.activeSources.length === 0) return null;
     const elapsed = this.context.currentTime - this.startTime + this.startOffset;
     return Math.max(0, Math.min(elapsed, this.playbackDuration));
+  }
+
+  getTransportState(): TransportState {
+    return {
+      isPlaying: this.isPlaying(),
+      bpm: this.bpm,
+      timelineOffset: this.timelineOffset,
+      position: this.getPlaybackPosition(),
+      playbackDuration: this.playbackDuration,
+    };
   }
 
   private startWatch() {

@@ -1,9 +1,10 @@
-import { useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import type { Project, SampleClip } from "../types";
 import { nanoid } from "nanoid";
 import { useProjectStore } from "../state/ProjectStore";
 import { theme } from "../theme";
 import { createDefaultTrackEffects } from "../lib/effectPresets";
+import { audioEngine } from "../lib/audioEngine";
 
 interface LiveLooperProps {
   project: Project;
@@ -13,30 +14,80 @@ export function LiveLooper({ project }: LiveLooperProps) {
   const { dispatch, currentProjectId } = useProjectStore();
   const [isArmed, setIsArmed] = useState(false);
   const [loopLength, setLoopLength] = useState(2);
+  const pendingRecording = useRef<number | null>(null);
+
+  useEffect(() => {
+    return () => {
+      if (pendingRecording.current !== null) {
+        window.clearTimeout(pendingRecording.current);
+        pendingRecording.current = null;
+      }
+    };
+  }, []);
+
+  useEffect(() => {
+    const handleStop = () => {
+      if (pendingRecording.current !== null) {
+        window.clearTimeout(pendingRecording.current);
+        pendingRecording.current = null;
+        setIsArmed(false);
+      }
+    };
+    window.addEventListener("audio-stop", handleStop);
+    return () => {
+      window.removeEventListener("audio-stop", handleStop);
+    };
+  }, []);
 
   const scheduleRecording = () => {
+    if (pendingRecording.current !== null) {
+      window.clearTimeout(pendingRecording.current);
+      pendingRecording.current = null;
+    }
+
+    const sanitizedLength = Math.max(1, Math.min(8, Math.round(loopLength)));
+    const measureDuration = (60 / project.masterBpm) * 4;
+    const loopDuration = sanitizedLength * measureDuration;
+    const transport = audioEngine.getTransportState();
+    const isTransportActive = transport.isPlaying && transport.position !== null;
+    const fallbackPosition = project.samples.length * measureDuration;
+    const currentPosition = isTransportActive
+      ? transport.timelineOffset + (transport.position ?? 0)
+      : fallbackPosition;
+    const measurePhase = currentPosition % measureDuration;
+    const downbeatTolerance = 0.03; // seconds; treat anything within this window as the current downbeat
+    const scheduledStart =
+      measurePhase > downbeatTolerance
+        ? currentPosition - measurePhase + measureDuration
+        : currentPosition;
+    const delayMs = isTransportActive
+      ? Math.max(0, Math.round((scheduledStart - currentPosition) * 1000))
+      : 0;
+    const takeNumber = project.samples.length + 1;
+
     setIsArmed(true);
-    setTimeout(() => {
+
+    pendingRecording.current = window.setTimeout(() => {
       const now = Date.now();
       const fakeFile = new File([""], `Live-${now}.wav`, { type: "audio/wav" });
       const defaultChannelId = project.channels.find((channel) => channel.type === "audio")?.id;
       const sample: SampleClip = {
         id: nanoid(),
-        name: `Live take ${project.samples.length + 1}`,
+        name: `Live take ${takeNumber}`,
         file: fakeFile,
         url: undefined,
         bpm: project.masterBpm,
         key: "1A",
-        measures: Array.from({ length: loopLength }, (_, index) => ({
+        measures: Array.from({ length: sanitizedLength }, (_, index) => ({
           id: nanoid(),
-          start: index * (60 / project.masterBpm * 4),
-          end: (index + 1) * (60 / project.masterBpm * 4),
+          start: index * measureDuration,
+          end: (index + 1) * measureDuration,
           beatCount: 4,
           isDownbeat: true
         })),
         stems: [],
-        position: project.samples.length * (60 / project.masterBpm * 4),
-        length: loopLength * (60 / project.masterBpm * 4),
+        position: scheduledStart,
+        length: loopDuration,
         isLooping: true,
         effects: createDefaultTrackEffects(),
         isInTimeline: true,
@@ -44,7 +95,8 @@ export function LiveLooper({ project }: LiveLooperProps) {
       };
       dispatch({ type: "add-sample", projectId: currentProjectId, sample });
       setIsArmed(false);
-    }, 600);
+      pendingRecording.current = null;
+    }, delayMs);
   };
 
   return (
