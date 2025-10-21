@@ -1,4 +1,4 @@
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi, type Mock } from "vitest";
 import { HarmoniqAudioBridge } from "../HarmoniqAudioBridge";
 import type { DeckPlaybackDiagnostics } from "../../types";
 
@@ -34,6 +34,13 @@ class MockAnalyserNode extends MockAudioNode {
     }
     target.set(this.data);
   }
+}
+
+class MockBiquadFilterNode extends MockAudioNode {
+  type: string = "lowpass";
+  frequency = { value: 0 };
+  Q = { value: 1 };
+  gain = { value: 0 };
 }
 
 class MockAudioBuffer {
@@ -73,6 +80,10 @@ class MockAudioContext {
 
   createAnalyser() {
     return new MockAnalyserNode();
+  }
+
+  createBiquadFilter() {
+    return new MockBiquadFilterNode();
   }
 
   createBufferSource() {
@@ -166,5 +177,40 @@ describe("HarmoniqAudioBridge", () => {
     expect(reloadSnapshot?.isPlaying).toBe(false);
 
     unsubscribe();
+  });
+
+  it("adjusts stem focus gains when toggled", async () => {
+    const buffer = new ArrayBuffer(8);
+    await bridge.loadDeckAudio("A", {
+      id: "focus-track",
+      arrayBuffer: buffer,
+      objectUrl: "blob:focus",
+      name: "Focus",
+    });
+    const internals = bridge as unknown as { decks: Map<string, any> };
+    const deck = internals.decks.get("A");
+    expect(deck).toBeTruthy();
+    deck.stemStages.forEach((stage: any) => {
+      (stage.gate.gain.setTargetAtTime as Mock).mockClear();
+    });
+
+    bridge.setDeckStemFocus("A", "vocals");
+
+    const vocalsStage = deck.stemStages.get("vocals");
+    const drumsStage = deck.stemStages.get("drums");
+    const synthStage = deck.stemStages.get("synths");
+    expect(vocalsStage.gate.gain.setTargetAtTime).toHaveBeenLastCalledWith(1, context.currentTime, 0.08);
+    expect(drumsStage.gate.gain.setTargetAtTime).toHaveBeenLastCalledWith(0.18, context.currentTime, 0.08);
+    expect(synthStage.gate.gain.setTargetAtTime).toHaveBeenLastCalledWith(0.18, context.currentTime, 0.08);
+
+    deck.stemStages.forEach((stage: any) => {
+      (stage.gate.gain.setTargetAtTime as Mock).mockClear();
+    });
+
+    bridge.setDeckStemFocus("A", null);
+
+    deck.stemStages.forEach((stage: any) => {
+      expect(stage.gate.gain.setTargetAtTime).toHaveBeenLastCalledWith(1, context.currentTime, 0.08);
+    });
   });
 });
