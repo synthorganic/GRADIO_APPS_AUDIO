@@ -55,6 +55,11 @@ class MockAudioBufferSourceNode extends MockAudioNode {
   buffer: MockAudioBuffer | null = null;
   onended: (() => void) | null = null;
   startedOffsets: number[] = [];
+  playbackRate = {
+    value: 1,
+    setTargetAtTime: vi.fn(),
+    setValueAtTime: vi.fn(),
+  };
 
   start(_when: number, offset = 0) {
     this.startedOffsets.push(offset);
@@ -73,6 +78,7 @@ class MockAudioContext {
   destination = new MockAudioNode();
   decodeDuration = 0;
   closed = false;
+  createdSources: MockAudioBufferSourceNode[] = [];
 
   createGain() {
     return new MockGainNode();
@@ -87,7 +93,9 @@ class MockAudioContext {
   }
 
   createBufferSource() {
-    return new MockAudioBufferSourceNode();
+    const source = new MockAudioBufferSourceNode();
+    this.createdSources.push(source);
+    return source;
   }
 
   decodeAudioData(_data: ArrayBuffer) {
@@ -179,38 +187,37 @@ describe("HarmoniqAudioBridge", () => {
     unsubscribe();
   });
 
-  it("adjusts stem focus gains when toggled", async () => {
-    const buffer = new ArrayBuffer(8);
+  it("updates playback rate when timestretch changes", async () => {
+    const buffer = new ArrayBuffer(32);
+    const snapshots: DeckPlaybackDiagnostics[] = [];
+    const unsubscribe = bridge.subscribeDiagnostics((snapshot) => snapshots.push(snapshot));
+
     await bridge.loadDeckAudio("A", {
-      id: "focus-track",
+      id: "deck-track",
       arrayBuffer: buffer,
-      objectUrl: "blob:focus",
-      name: "Focus",
-    });
-    const internals = bridge as unknown as { decks: Map<string, any> };
-    const deck = internals.decks.get("A");
-    expect(deck).toBeTruthy();
-    deck.stemStages.forEach((stage: any) => {
-      (stage.gate.gain.setTargetAtTime as Mock).mockClear();
+      objectUrl: "blob:deck",
+      name: "Deck",
     });
 
-    bridge.setDeckStemFocus("A", "vocals");
+    await bridge.playDeck("A");
+    const source = context.createdSources.at(-1);
+    expect(source?.playbackRate.value).toBeCloseTo(1);
 
-    const vocalsStage = deck.stemStages.get("vocals");
-    const drumsStage = deck.stemStages.get("drums");
-    const synthStage = deck.stemStages.get("synths");
-    expect(vocalsStage.gate.gain.setTargetAtTime).toHaveBeenLastCalledWith(1, context.currentTime, 0.08);
-    expect(drumsStage.gate.gain.setTargetAtTime).toHaveBeenLastCalledWith(0.18, context.currentTime, 0.08);
-    expect(synthStage.gate.gain.setTargetAtTime).toHaveBeenLastCalledWith(0.18, context.currentTime, 0.08);
+    snapshots.length = 0;
+    context.currentTime = 1;
+    vi.advanceTimersByTime(10);
+    const beforeChange = snapshots.at(-1)?.currentTimeSeconds ?? 0;
 
-    deck.stemStages.forEach((stage: any) => {
-      (stage.gate.gain.setTargetAtTime as Mock).mockClear();
-    });
+    context.currentTime = 1.5;
+    bridge.setTimestretch(1.5);
+    expect(source?.playbackRate.setTargetAtTime).toHaveBeenCalledWith(1.5, 1.5, 0.05);
 
-    bridge.setDeckStemFocus("A", null);
+    snapshots.length = 0;
+    context.currentTime = 2;
+    vi.advanceTimersByTime(10);
+    const afterChange = snapshots.at(-1)?.currentTimeSeconds ?? 0;
+    expect(afterChange).toBeGreaterThan(beforeChange + 0.7);
 
-    deck.stemStages.forEach((stage: any) => {
-      expect(stage.gate.gain.setTargetAtTime).toHaveBeenLastCalledWith(1, context.currentTime, 0.08);
-    });
+    unsubscribe();
   });
 });

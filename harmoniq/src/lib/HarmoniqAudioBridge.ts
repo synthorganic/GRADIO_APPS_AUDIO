@@ -620,6 +620,8 @@ export class HarmoniqAudioBridge {
 
   private masterTrim = 0.9;
 
+  private timestretch = 1;
+
   private smoothing = 0.08;
 
   private readonly injectedContext: AudioContext | null;
@@ -755,6 +757,40 @@ export class HarmoniqAudioBridge {
     master.gain.setTargetAtTime(clamped, context.currentTime, 0.1);
   }
 
+  setTimestretch(value: number) {
+    const clamped = clamp(value, 0.25, 4);
+    const previous = this.timestretch;
+    this.timestretch = clamped;
+    const context = this.getContext();
+    if (!context || previous === clamped) {
+      return;
+    }
+    this.playback.forEach((playback) => {
+      if (!playback.isPlaying || playback.startedAt === null) {
+        return;
+      }
+      const duration = playback.durationSeconds ?? playback.buffer?.duration ?? null;
+      const elapsed = Math.max(0, context.currentTime - playback.startedAt);
+      const advanced = playback.position + elapsed * previous;
+      playback.position = duration ? clamp(advanced, 0, duration) : advanced;
+      playback.startedAt = context.currentTime;
+    });
+    this.playback.forEach((playback) => {
+      const source = playback.source;
+      if (!source) {
+        return;
+      }
+      try {
+        if (source.playbackRate && typeof source.playbackRate.setTargetAtTime === "function") {
+          source.playbackRate.setTargetAtTime(clamped, context.currentTime, 0.05);
+        } else if (source.playbackRate) {
+          source.playbackRate.value = clamped;
+        }
+      } catch {}
+    });
+    this.updateAllDiagnostics();
+  }
+
   setEffectState(deckId: DeckId, effectId: DeckFxId, enabled: boolean, params: DeckFxParams = {}) {
     const context = this.getContext();
     if (!context) return;
@@ -866,7 +902,8 @@ export class HarmoniqAudioBridge {
       return duration ? clamp(clampedPosition, 0, duration) : clampedPosition;
     }
     const elapsed = Math.max(0, context.currentTime - playback.startedAt);
-    const current = clampedPosition + elapsed;
+    const rate = Math.max(this.timestretch, 0.01);
+    const current = clampedPosition + elapsed * rate;
     return duration ? clamp(current, 0, duration) : current;
   }
 
@@ -1039,6 +1076,14 @@ export class HarmoniqAudioBridge {
       );
       const source = context.createBufferSource();
       source.buffer = playback.buffer;
+      if (source.playbackRate) {
+        source.playbackRate.value = this.timestretch;
+        try {
+          if (typeof source.playbackRate.setValueAtTime === "function") {
+            source.playbackRate.setValueAtTime(this.timestretch, context.currentTime);
+          }
+        } catch {}
+      }
       source.connect(deck.input);
       source.onended = () => {
         const current = this.playback.get(deckId);

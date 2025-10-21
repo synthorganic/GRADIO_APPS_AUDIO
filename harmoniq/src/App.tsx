@@ -310,6 +310,8 @@ const INITIAL_LOOP_SLOTS: Record<DeckId, LoopSlot[]> = {
   D: createLoopSlots("D"),
 };
 
+const MASTER_BASE_BPM = 128;
+
 const FX_RACK_PRESETS: Record<"left" | "right", FxModuleConfig[]> = {
   left: [
     { id: "drive", label: "Drive", amount: 0.62, enabled: true, accent: "rgba(255, 148, 241, 0.85)" },
@@ -332,11 +334,11 @@ export default function App() {
   const [crossfade, setCrossfade] = useState<CrossfadeState>({ x: 0.45, y: 0.35 });
   const [selectedKey, setSelectedKey] = useState("8A");
   const [loopSlots, setLoopSlots] = useState<Record<DeckId, LoopSlot[]>>(INITIAL_LOOP_SLOTS);
-  const [masterTempo, setMasterTempo] = useState(128);
-  const [masterPitch, setMasterPitch] = useState(0);
+  const [masterTimestretch, setMasterTimestretch] = useState(1);
   const [masterTrim, setMasterTrim] = useState(0.9);
   const [selectorKey, setSelectorKey] = useState<string | null>(null);
   const [libraryTracks, setLibraryTracks] = useState<AnalyzedTrackSummary[]>([]);
+  const masterBpm = useMemo(() => MASTER_BASE_BPM * masterTimestretch, [masterTimestretch]);
   const loopTimers = useRef<Map<string, number>>(new Map());
   const audioBridge = useMemo(() => {
     if (typeof window === "undefined") {
@@ -593,6 +595,11 @@ export default function App() {
 
   useEffect(() => {
     if (!audioBridge) return;
+    audioBridge.setTimestretch(masterTimestretch);
+  }, [audioBridge, masterTimestretch]);
+
+  useEffect(() => {
+    if (!audioBridge) return;
     decks.forEach((deck) => {
       FX_IDS.forEach((effectId) => {
         const enabled = deck.fxActive[effectId] ?? false;
@@ -759,8 +766,9 @@ export default function App() {
     const timerKey = `stem-${deckId}`;
     clearLoopTimersForSlot(timerKey);
 
-    const bpm = deck.bpm ?? masterTempo;
-    const measureMs = Math.max(Math.round((60_000 / Math.max(bpm, 1)) * 4), 400);
+    const baseBpm = deck.bpm ?? MASTER_BASE_BPM;
+    const stretchedBpm = Math.max(baseBpm * masterTimestretch, 1);
+    const measureMs = Math.max(Math.round((60_000 / stretchedBpm) * 4), 400);
 
     setDecks((prev) =>
       prev.map((item) =>
@@ -848,11 +856,10 @@ export default function App() {
               onFocusDeck={handleFocusDeck}
               loopSlots={loopSlots}
               onToggleLoopSlot={handleToggleLoopSlot}
-              masterTempo={masterTempo}
-              masterPitch={masterPitch}
+              masterTimestretch={masterTimestretch}
+              masterBpm={masterBpm}
               masterTrim={masterTrim}
-              onMasterTempoChange={setMasterTempo}
-              onMasterPitchChange={setMasterPitch}
+              onMasterTimestretchChange={setMasterTimestretch}
               onMasterTrimChange={setMasterTrim}
               onToggleEq={handleToggleEq}
               onTriggerStem={handleTriggerStem}
