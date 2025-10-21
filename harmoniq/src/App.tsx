@@ -1,7 +1,17 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { theme } from "@daw/theme";
 import { DeckMatrix } from "./components/DeckMatrix";
-import type { CrossfadeState, DeckId, DeckPerformance, LoopSlot, StemType } from "./types";
+import type {
+  CrossfadeState,
+  DeckAudioSource,
+  DeckFxId,
+  DeckFxParams,
+  DeckId,
+  DeckPerformance,
+  DeckPlaybackDiagnostics,
+  LoopSlot,
+  StemType,
+} from "./types";
 import { HarmonicWheelSelector } from "./components/HarmonicWheelSelector";
 import { FxRackPanel, type FxModuleConfig } from "./components/FxRackPanel";
 import { createWaveform } from "./shared/waveforms";
@@ -9,6 +19,7 @@ import { useLoopLibrary } from "./state/LoopLibraryStore";
 import { TrackSelectionModal } from "./components/TrackSelectionModal";
 import { TrackUploadPanel, type AnalyzedTrackSummary } from "./components/TrackUploadPanel";
 import { TrackLibraryList } from "./components/TrackLibraryList";
+import { HarmoniqAudioBridge } from "./lib/HarmoniqAudioBridge";
 
 const CAMELOT_ORDER = [
   "1A",
@@ -39,6 +50,47 @@ const CAMELOT_ORDER = [
 
 const CAMELOT_RANK = new Map(CAMELOT_ORDER.map((key, index) => [key, index]));
 
+const FX_IDS: DeckFxId[] = ["reverb", "rhythmicGate", "stutter", "glitch", "crush", "phaser"];
+
+const FX_DEFAULT_PARAMS: Record<DeckFxId, DeckFxParams> = {
+  reverb: { mix: 0.65, size: 0.72, decay: 0.66 },
+  rhythmicGate: { mix: 0.85, rate: "1/8", swing: 0.15 },
+  stutter: { mix: 0.62, division: "1/8", jitter: 0.25 },
+  glitch: { mix: 0.7, density: 0.5, scatter: 0.4 },
+  crush: { mix: 0.78, depth: 6, downsample: 0.35 },
+  phaser: { mix: 0.68, rate: 0.35, depth: 0.55 },
+};
+
+const DEFAULT_FX_STATE: Record<DeckFxId, boolean> = {
+  reverb: false,
+  rhythmicGate: false,
+  stutter: false,
+  glitch: false,
+  crush: false,
+  phaser: false,
+};
+
+function createFxState(overrides: Partial<Record<DeckFxId, boolean>> = {}) {
+  return { ...DEFAULT_FX_STATE, ...overrides };
+}
+
+function clamp(value: number, min: number, max: number) {
+  return Math.max(min, Math.min(max, value));
+}
+
+function computeCrossfadeWeights(crossfade: CrossfadeState): Record<DeckId, number> {
+  const left = 1 - crossfade.x;
+  const right = crossfade.x;
+  const top = 1 - crossfade.y;
+  const bottom = crossfade.y;
+  return {
+    A: Number((left * top).toFixed(4)),
+    B: Number((right * top).toFixed(4)),
+    C: Number((left * bottom).toFixed(4)),
+    D: Number((right * bottom).toFixed(4)),
+  };
+}
+
 function sortLoopsByCamelot<T extends { key: string }>(loops: T[]): T[] {
   return [...loops].sort((a, b) => {
     const rankA = CAMELOT_RANK.get(a.key) ?? Number.MAX_SAFE_INTEGER;
@@ -50,10 +102,6 @@ function sortLoopsByCamelot<T extends { key: string }>(loops: T[]): T[] {
   });
 }
 
-function clamp(value: number, min: number, max: number) {
-  return Math.max(min, Math.min(max, value));
-}
-
 const INITIAL_DECKS: DeckPerformance[] = [
   {
     id: "A",
@@ -62,7 +110,7 @@ const INITIAL_DECKS: DeckPerformance[] = [
     filter: 0.42,
     resonance: 0.4,
     zoom: 1,
-    fxStack: ["Delay", "Filter", "Space"],
+    fxActive: createFxState({ reverb: true, stutter: true, phaser: true }),
     isFocused: true,
     level: 0.68,
     bpm: 124,
@@ -72,6 +120,11 @@ const INITIAL_DECKS: DeckPerformance[] = [
     activeStem: null,
     queuedStem: null,
     stemStatus: "main",
+    durationSeconds: 252,
+    currentTimeSeconds: 0,
+    isPlaying: false,
+    playbackError: null,
+    vu: 0,
   },
   {
     id: "B",
@@ -80,7 +133,7 @@ const INITIAL_DECKS: DeckPerformance[] = [
     filter: 0.53,
     resonance: 0.5,
     zoom: 1,
-    fxStack: ["Flange", "Drive"],
+    fxActive: createFxState({ phaser: true, crush: true }),
     isFocused: false,
     level: 0.72,
     bpm: 128,
@@ -90,6 +143,11 @@ const INITIAL_DECKS: DeckPerformance[] = [
     activeStem: null,
     queuedStem: null,
     stemStatus: "main",
+    durationSeconds: 236,
+    currentTimeSeconds: 0,
+    isPlaying: false,
+    playbackError: null,
+    vu: 0,
   },
   {
     id: "C",
@@ -98,7 +156,7 @@ const INITIAL_DECKS: DeckPerformance[] = [
     filter: 0.31,
     resonance: 0.46,
     zoom: 1.1,
-    fxStack: ["Phase", "Ducker"],
+    fxActive: createFxState({ phaser: true, rhythmicGate: true }),
     isFocused: false,
     level: 0.44,
     bpm: 118,
@@ -108,6 +166,11 @@ const INITIAL_DECKS: DeckPerformance[] = [
     activeStem: null,
     queuedStem: null,
     stemStatus: "main",
+    durationSeconds: 214,
+    currentTimeSeconds: 0,
+    isPlaying: false,
+    playbackError: null,
+    vu: 0,
   },
   {
     id: "D",
@@ -116,7 +179,7 @@ const INITIAL_DECKS: DeckPerformance[] = [
     filter: 0.37,
     resonance: 0.42,
     zoom: 0.92,
-    fxStack: ["Reverb", "Crush"],
+    fxActive: createFxState({ reverb: true, crush: true }),
     isFocused: false,
     level: 0.58,
     bpm: 122,
@@ -126,6 +189,11 @@ const INITIAL_DECKS: DeckPerformance[] = [
     activeStem: null,
     queuedStem: null,
     stemStatus: "main",
+    durationSeconds: 206,
+    currentTimeSeconds: 0,
+    isPlaying: false,
+    playbackError: null,
+    vu: 0,
   },
 ];
 
@@ -170,22 +238,68 @@ export default function App() {
   const [loopSlots, setLoopSlots] = useState<Record<DeckId, LoopSlot[]>>(INITIAL_LOOP_SLOTS);
   const [masterTempo, setMasterTempo] = useState(128);
   const [masterPitch, setMasterPitch] = useState(0);
+  const [masterTrim, setMasterTrim] = useState(0.9);
   const [selectorKey, setSelectorKey] = useState<string | null>(null);
   const [libraryTracks, setLibraryTracks] = useState<AnalyzedTrackSummary[]>([]);
   const loopTimers = useRef<Map<string, number>>(new Map());
+  const audioBridge = useMemo(() => {
+    if (typeof window === "undefined") {
+      return null;
+    }
+    return new HarmoniqAudioBridge();
+  }, []);
+
+  useEffect(() => {
+    return () => {
+      audioBridge?.dispose();
+    };
+  }, [audioBridge]);
 
   const handleTracksAnalyzed = (tracks: AnalyzedTrackSummary[]) => {
     if (!tracks.length) return;
-    setLibraryTracks((prev) => {
-      const merged = new Map<string, AnalyzedTrackSummary>();
-      prev.forEach((item) => {
-        merged.set(item.origin, item);
+    void (async () => {
+      const enriched = await Promise.all(
+        tracks.map(async (track) => {
+          if (!audioBridge) {
+            return {
+              ...track,
+              durationSeconds: track.durationSeconds ?? null,
+              analysisError: track.analysisError ?? "Audio engine unavailable",
+            };
+          }
+          try {
+            const analysis = await audioBridge.analyzeSource({
+              id: track.id,
+              objectUrl: track.objectUrl,
+              file: track.file,
+              name: track.name,
+            });
+            return {
+              ...track,
+              durationSeconds: analysis.durationSeconds ?? track.durationSeconds ?? null,
+              analysisError: null,
+            };
+          } catch (error) {
+            const message = error instanceof Error ? error.message : String(error);
+            return {
+              ...track,
+              durationSeconds: null,
+              analysisError: `Unable to decode audio: ${message}`,
+            };
+          }
+        }),
+      );
+      setLibraryTracks((prev) => {
+        const merged = new Map<string, AnalyzedTrackSummary>();
+        prev.forEach((item) => {
+          merged.set(item.origin, item);
+        });
+        enriched.forEach((item) => {
+          merged.set(item.origin, item);
+        });
+        return Array.from(merged.values()).sort((a, b) => a.name.localeCompare(b.name));
       });
-      tracks.forEach((item) => {
-        merged.set(item.origin, item);
-      });
-      return Array.from(merged.values()).sort((a, b) => a.name.localeCompare(b.name));
-    });
+    })();
   };
 
   const computeSeedFromName = (name: string) => {
@@ -209,6 +323,14 @@ export default function App() {
   };
 
   const handleLoadTrackToDeck = (deckId: DeckId, track: AnalyzedTrackSummary) => {
+    if (track.analysisError) {
+      setDecks((prev) =>
+        prev.map((deck) =>
+          deck.id === deckId ? { ...deck, playbackError: track.analysisError, isPlaying: false } : deck,
+        ),
+      );
+      return;
+    }
     const waveformSeed = computeSeedFromName(track.name);
     setDecks((prev) =>
       prev.map((deck) =>
@@ -226,6 +348,14 @@ export default function App() {
                 label: stem.label,
                 status: "standby",
               })),
+              durationSeconds: track.durationSeconds ?? deck.durationSeconds ?? null,
+              currentTimeSeconds: 0,
+              isPlaying: false,
+              playbackError: null,
+              objectUrl: track.objectUrl,
+              trackId: track.id,
+              file: track.file,
+              vu: 0,
             }
           : deck,
       ),
@@ -235,22 +365,166 @@ export default function App() {
       [deckId]: prev[deckId]?.map((slot) => ({ ...slot, status: "idle" })) ?? createLoopSlots(deckId),
     }));
     handleFocusDeck(deckId);
+    if (audioBridge) {
+      const source: DeckAudioSource = {
+        id: track.id,
+        objectUrl: track.objectUrl,
+        file: track.file,
+        name: track.name,
+      };
+      audioBridge
+        .loadDeckAudio(deckId, source)
+        .then((result) => {
+          setDecks((prev) =>
+            prev.map((deck) =>
+              deck.id === deckId
+                ? {
+                    ...deck,
+                    durationSeconds:
+                      result.durationSeconds ?? track.durationSeconds ?? deck.durationSeconds ?? null,
+                    playbackError: null,
+                    objectUrl: source.objectUrl,
+                    trackId: source.id,
+                    file: source.file ?? deck.file ?? null,
+                  }
+                : deck,
+            ),
+          );
+        })
+        .catch((error) => {
+          const message = error instanceof Error ? error.message : String(error);
+          setDecks((prev) =>
+            prev.map((deck) =>
+              deck.id === deckId
+                ? {
+                    ...deck,
+                    playbackError: `Playback failed: ${message}`,
+                    isPlaying: false,
+                  }
+                : deck,
+            ),
+          );
+        });
+    }
+  };
+
+  const updatePlaybackError = (deckId: DeckId, message: string | null) => {
+    setDecks((prev) =>
+      prev.map((deck) => (deck.id === deckId ? { ...deck, playbackError: message, isPlaying: message ? false : deck.isPlaying } : deck)),
+    );
+  };
+
+  const handleRetryPlayback = async (deckId: DeckId) => {
+    if (!audioBridge) return;
+    const deck = decks.find((item) => item.id === deckId);
+    if (!deck || !deck.objectUrl || !deck.trackId) {
+      return;
+    }
+    try {
+      await audioBridge.reloadDeck(deckId, {
+        id: deck.trackId,
+        objectUrl: deck.objectUrl,
+        file: deck.file ?? undefined,
+        name: deck.loopName,
+      });
+      updatePlaybackError(deckId, null);
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      updatePlaybackError(deckId, message);
+    }
+  };
+
+  const handleTogglePlayback = async (deckId: DeckId) => {
+    if (!audioBridge) return;
+    const deck = decks.find((item) => item.id === deckId);
+    if (!deck) return;
+    if (deck.playbackError) {
+      await handleRetryPlayback(deckId);
+      return;
+    }
+    try {
+      if (deck.isPlaying) {
+        await audioBridge.stopDeck(deckId);
+      } else {
+        await audioBridge.playDeck(deckId);
+      }
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      updatePlaybackError(deckId, message);
+    }
+  };
+
+  const handleSeekDeck = async (deckId: DeckId, ratio: number) => {
+    if (!audioBridge) return;
+    const deck = decks.find((item) => item.id === deckId);
+    if (!deck || !deck.durationSeconds || Number.isNaN(deck.durationSeconds)) {
+      return;
+    }
+    const clampedRatio = clamp(ratio, 0, 1);
+    const targetSeconds = deck.durationSeconds * clampedRatio;
+    try {
+      await audioBridge.seekDeck(deckId, targetSeconds);
+      setDecks((prev) =>
+        prev.map((item) =>
+          item.id === deckId
+            ? {
+                ...item,
+                currentTimeSeconds: targetSeconds,
+              }
+            : item,
+        ),
+      );
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      updatePlaybackError(deckId, message);
+    }
   };
 
   useEffect(() => {
-    const timer = setInterval(() => {
+    if (!audioBridge) return;
+    const weights = computeCrossfadeWeights(crossfade);
+    decks.forEach((deck) => {
+      const deckWeight = weights[deck.id] ?? 0;
+      const blend = clamp(deck.level * deckWeight, 0, 1);
+      audioBridge.setDeckBlend(deck.id, blend);
+    });
+  }, [audioBridge, crossfade, decks]);
+
+  useEffect(() => {
+    if (!audioBridge) return;
+    audioBridge.setMasterTrim(masterTrim);
+  }, [audioBridge, masterTrim]);
+
+  useEffect(() => {
+    if (!audioBridge) return;
+    decks.forEach((deck) => {
+      FX_IDS.forEach((effectId) => {
+        const enabled = deck.fxActive[effectId] ?? false;
+        audioBridge.setEffectState(deck.id, effectId, enabled, FX_DEFAULT_PARAMS[effectId]);
+      });
+    });
+  }, [audioBridge, decks]);
+
+  useEffect(() => {
+    if (!audioBridge) return;
+    return audioBridge.subscribeDiagnostics((snapshot: DeckPlaybackDiagnostics) => {
       setDecks((prev) =>
-        prev.map((deck) => {
-          const floor = 0.15;
-          const ceiling = 0.98;
-          const jitter = (Math.random() - 0.5) * 0.12;
-          const nextLevel = clamp(deck.level + jitter, floor, ceiling);
-          return { ...deck, level: Number(nextLevel.toFixed(2)) };
-        }),
+        prev.map((deck) =>
+          deck.id === snapshot.deckId
+            ? {
+                ...deck,
+                isPlaying: snapshot.isPlaying,
+                currentTimeSeconds: snapshot.currentTimeSeconds,
+                durationSeconds: snapshot.durationSeconds ?? deck.durationSeconds ?? null,
+                playbackError: snapshot.error,
+                vu: snapshot.vu,
+                level: snapshot.vu,
+              }
+            : deck,
+        ),
       );
-    }, 1300);
-    return () => clearInterval(timer);
-  }, []);
+    });
+  }, [audioBridge]);
 
   useEffect(() => {
     return () => {
@@ -303,6 +577,24 @@ export default function App() {
         updateLoopSlotStatus(deckId, slotId, "playing");
       });
     });
+  };
+
+  const handleToggleFx = (deckId: DeckId, effectId: DeckFxId) => {
+    setDecks((prev) =>
+      prev.map((deck) =>
+        deck.id === deckId
+          ? {
+              ...deck,
+              fxActive: { ...deck.fxActive, [effectId]: !deck.fxActive[effectId] },
+            }
+          : deck,
+      ),
+    );
+    const deck = decks.find((item) => item.id === deckId);
+    const nextEnabled = !(deck?.fxActive[effectId] ?? false);
+    if (audioBridge) {
+      audioBridge.setEffectState(deckId, effectId, nextEnabled, FX_DEFAULT_PARAMS[effectId]);
+    }
   };
 
   const handleUpdateDeck = (deckId: DeckId, patch: Partial<DeckPerformance>) => {
@@ -447,10 +739,16 @@ export default function App() {
               onToggleLoopSlot={handleToggleLoopSlot}
               masterTempo={masterTempo}
               masterPitch={masterPitch}
+              masterTrim={masterTrim}
               onMasterTempoChange={setMasterTempo}
               onMasterPitchChange={setMasterPitch}
+              onMasterTrimChange={setMasterTrim}
               onToggleEq={handleToggleEq}
               onTriggerStem={handleTriggerStem}
+              onToggleFx={handleToggleFx}
+              onTogglePlayback={handleTogglePlayback}
+              onSeekRatio={handleSeekDeck}
+              onRetryPlayback={handleRetryPlayback}
             />
           </div>
           <div className="harmoniq-shell__wheel">

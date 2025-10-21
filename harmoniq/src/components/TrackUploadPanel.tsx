@@ -1,4 +1,12 @@
-import { useCallback, useMemo, useRef, useState, type CSSProperties, type DragEvent } from "react";
+import {
+  useCallback,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+  type CSSProperties,
+  type DragEvent,
+} from "react";
 import { theme } from "@daw/theme";
 
 export interface AnalyzedStem {
@@ -13,6 +21,10 @@ export interface AnalyzedTrackSummary {
   scale: string;
   stems: AnalyzedStem[];
   origin: string;
+  file: File;
+  objectUrl: string;
+  durationSeconds: number | null;
+  analysisError: string | null;
 }
 
 interface TrackUploadPanelProps {
@@ -116,6 +128,14 @@ export function TrackUploadPanel({ onTracksAnalyzed }: TrackUploadPanelProps) {
   const [isDragging, setIsDragging] = useState(false);
   const [isAnalyzing, setIsAnalyzing] = useState(false);
   const fileInputRef = useRef<HTMLInputElement | null>(null);
+  const objectUrlsRef = useRef<Map<string, string>>(new Map());
+
+  useEffect(() => {
+    return () => {
+      objectUrlsRef.current.forEach((url) => URL.revokeObjectURL(url));
+      objectUrlsRef.current.clear();
+    };
+  }, []);
 
   const borderStyle = isDragging
     ? "1px solid rgba(103, 255, 230, 0.85)"
@@ -145,6 +165,8 @@ export function TrackUploadPanel({ onTracksAnalyzed }: TrackUploadPanelProps) {
           continue;
         }
         seenOrigins.add(origin);
+        const objectUrl = URL.createObjectURL(item.file);
+        objectUrlsRef.current.set(item.id, objectUrl);
         const baseKey = `${item.file.name}-${item.file.size}-${item.file.lastModified}`;
         const hash = hashString(baseKey);
         const bpm = 78 + (hash % 96);
@@ -156,6 +178,10 @@ export function TrackUploadPanel({ onTracksAnalyzed }: TrackUploadPanelProps) {
           scale,
           stems: DEFAULT_STEMS.map((stem, index) => ({ ...stem, id: `${stem.id}-${hash % 100}-${index}` })),
           origin,
+          file: item.file,
+          objectUrl,
+          durationSeconds: null,
+          analysisError: null,
         });
       }
       onTracksAnalyzed(tracks);

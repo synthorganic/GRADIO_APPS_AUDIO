@@ -112,6 +112,7 @@ export interface LoopLibraryItem {
   usageCount: number;
   lastLoadedAt: number | null;
   lastDeckId: DeckId | null;
+  durationSeconds: number | null;
 }
 
 export type LoopLibraryDraft = {
@@ -123,6 +124,7 @@ export type LoopLibraryDraft = {
   mood: string;
   folder?: string;
   automationIds?: string[];
+  durationSeconds?: number | null;
 };
 
 export type AutomationEnvelopeDraft = {
@@ -216,6 +218,7 @@ function normalizeLoopDraft(draft: LoopLibraryDraft, timestamp = Date.now()): Lo
     usageCount: 0,
     lastLoadedAt: null,
     lastDeckId: null,
+    durationSeconds: draft.durationSeconds ?? null,
   };
 }
 
@@ -300,6 +303,7 @@ function createDefaultState(): LoopLibraryState {
         mood: "Glasswave",
         folder: DEFAULT_FOLDERS[1],
         automationIds: [envOne.id],
+        durationSeconds: 252,
       },
       now - 1000 * 60 * 90,
     ),
@@ -312,6 +316,7 @@ function createDefaultState(): LoopLibraryState {
         mood: "Retrograde",
         folder: DEFAULT_FOLDERS[2],
         automationIds: [envTwo.id],
+        durationSeconds: 236,
       },
       now - 1000 * 60 * 64,
     ),
@@ -324,6 +329,7 @@ function createDefaultState(): LoopLibraryState {
         mood: "Azure",
         folder: DEFAULT_FOLDERS[3],
         automationIds: [envThree.id],
+        durationSeconds: 214,
       },
       now - 1000 * 60 * 38,
     ),
@@ -336,6 +342,7 @@ function createDefaultState(): LoopLibraryState {
         mood: "Hypnotic",
         folder: DEFAULT_FOLDERS[1],
         automationIds: [envOne.id, envTwo.id],
+        durationSeconds: 206,
       },
       now - 1000 * 60 * 18,
     ),

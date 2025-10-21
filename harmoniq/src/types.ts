@@ -11,6 +11,10 @@ export interface LoopSlot {
 
 export type StemStatus = "standby" | "active" | "muted";
 
+export type DeckFxId = "reverb" | "rhythmicGate" | "stutter" | "glitch" | "crush" | "phaser";
+
+export type DeckFxParams = Record<string, number | string>;
+
 export interface DeckStem {
   id: string;
   label: string;
@@ -24,7 +28,7 @@ export interface DeckPerformance {
   filter: number;
   resonance: number;
   zoom: number;
-  fxStack: string[];
+  fxActive: Record<DeckFxId, boolean>;
   isFocused: boolean;
   level: number;
   bpm?: number;
@@ -37,6 +41,14 @@ export interface DeckPerformance {
   stems?: DeckStem[];
   source?: string;
   scale?: string;
+  durationSeconds?: number | null;
+  currentTimeSeconds?: number;
+  isPlaying?: boolean;
+  playbackError?: string | null;
+  vu?: number;
+  objectUrl?: string;
+  trackId?: string;
+  file?: File | null;
 }
 
 export interface CrossfadeState {
@@ -45,3 +57,20 @@ export interface CrossfadeState {
 }
 
 export type StemType = "vocals" | "drums" | "synths";
+
+export interface DeckPlaybackDiagnostics {
+  deckId: DeckId;
+  isPlaying: boolean;
+  currentTimeSeconds: number;
+  durationSeconds: number | null;
+  vu: number;
+  error: string | null;
+}
+
+export interface DeckAudioSource {
+  id: string;
+  objectUrl: string;
+  file?: File;
+  arrayBuffer?: ArrayBuffer;
+  name?: string;
+}
