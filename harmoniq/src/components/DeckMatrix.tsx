@@ -23,11 +23,10 @@ export interface DeckMatrixProps {
   onFocusDeck: (deckId: DeckId) => void;
   loopSlots: Record<DeckId, LoopSlot[]>;
   onToggleLoopSlot: (deckId: DeckId, slotId: string) => void;
-  masterTempo: number;
-  masterPitch: number;
+  masterTimestretch: number;
+  masterBpm: number;
   masterTrim: number;
-  onMasterTempoChange: (value: number) => void;
-  onMasterPitchChange: (value: number) => void;
+  onMasterTimestretchChange: (value: number) => void;
   onMasterTrimChange: (value: number) => void;
   onToggleEq: (deckId: DeckId, band: "highs" | "mids" | "lows") => void;
   onTriggerStem: (deckId: DeckId, stem: StemType) => void;
@@ -634,11 +633,10 @@ export function DeckMatrix({
   onFocusDeck,
   loopSlots,
   onToggleLoopSlot,
-  masterTempo,
-  masterPitch,
+  masterTimestretch,
+  masterBpm,
   masterTrim,
-  onMasterTempoChange,
-  onMasterPitchChange,
+  onMasterTimestretchChange,
   onMasterTrimChange,
   onToggleEq,
   onTriggerStem,
@@ -1347,9 +1345,8 @@ export function DeckMatrix({
           >
             <span>Master</span>
             <span style={{ display: "flex", gap: "12px", alignItems: "center" }}>
-              <span>{Math.round(masterTempo)} BPM</span>
               <span>
-                Pitch {masterPitch > 0 ? `+${masterPitch.toFixed(1)}` : masterPitch.toFixed(1)} st
+                Timestretch {masterTimestretch.toFixed(2)}× ({Math.round(masterBpm)} BPM)
               </span>
               <span>Output {Math.round(masterTrim * 100)}%</span>
             </span>
@@ -1357,27 +1354,18 @@ export function DeckMatrix({
           <div
             style={{
               display: "grid",
-              gridTemplateColumns: "repeat(3, minmax(0, 1fr))",
+              gridTemplateColumns: "repeat(2, minmax(0, 1fr))",
               gap: "12px",
             }}
           >
             <MasterControlSlider
-              label="Tempo"
-              value={masterTempo}
-              min={80}
-              max={160}
-              step={1}
-              suffix="BPM"
-              onChange={onMasterTempoChange}
-            />
-            <MasterControlSlider
-              label="Pitch"
-              value={masterPitch}
-              min={-12}
-              max={12}
-              step={0.1}
-              suffix="st"
-              onChange={onMasterPitchChange}
+              label="Timestretch"
+              value={masterTimestretch}
+              min={0.5}
+              max={1.5}
+              step={0.01}
+              suffix="×"
+              onChange={onMasterTimestretchChange}
             />
             <MasterControlSlider
               label="Output"
