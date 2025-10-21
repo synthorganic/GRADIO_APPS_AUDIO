@@ -1,10 +1,11 @@
-import { Fragment, useMemo, useRef } from "react";
+import { Fragment, useCallback, useMemo, useRef, useState } from "react";
 import type { PointerEvent } from "react";
 import { theme } from "@daw/theme";
 import { cardSurfaceStyle, toolbarButtonStyle } from "@daw/components/layout/styles";
 import { WaveformPreview } from "./WaveformPreview";
 import type {
   CrossfadeState,
+  DeckFxId,
   DeckId,
   DeckPerformance,
   LoopSlot,
@@ -24,10 +25,16 @@ export interface DeckMatrixProps {
   onToggleLoopSlot: (deckId: DeckId, slotId: string) => void;
   masterTempo: number;
   masterPitch: number;
+  masterTrim: number;
   onMasterTempoChange: (value: number) => void;
   onMasterPitchChange: (value: number) => void;
+  onMasterTrimChange: (value: number) => void;
   onToggleEq: (deckId: DeckId, band: "highs" | "mids" | "lows") => void;
   onTriggerStem: (deckId: DeckId, stem: StemType) => void;
+  onToggleFx: (deckId: DeckId, effectId: DeckFxId) => void;
+  onTogglePlayback: (deckId: DeckId) => void;
+  onSeekRatio: (deckId: DeckId, ratio: number) => void;
+  onRetryPlayback: (deckId: DeckId) => void;
 }
 
 type PointerInfo = {
@@ -57,6 +64,23 @@ function round(value: number) {
   return Number(value.toFixed(2));
 }
 
+function formatTime(value?: number | null) {
+  if (value === undefined || value === null || !Number.isFinite(value)) {
+    return "–";
+  }
+  const total = Math.max(0, Math.floor(value));
+  const minutes = Math.floor(total / 60);
+  const seconds = total % 60;
+  return `${minutes}:${seconds.toString().padStart(2, "0")}`;
+}
+
+function ratioToSeconds(ratio: number, durationSeconds: number | null | undefined) {
+  if (!durationSeconds || !Number.isFinite(durationSeconds) || durationSeconds <= 0) {
+    return 0;
+  }
+  return clamp(ratio, 0, 1) * durationSeconds;
+}
+
 function MasterControlSlider({
   label,
   value,
@@ -74,7 +98,9 @@ function MasterControlSlider({
   suffix: string;
   onChange: (value: number) => void;
 }) {
-  const formattedBase = step < 1 ? value.toFixed(1) : Math.round(value).toString();
+  const precision = step < 0.1 ? 2 : step < 1 ? 1 : 0;
+  const formattedBase =
+    precision > 0 ? value.toFixed(precision) : Math.round(value).toString();
   const display = suffix === "st" && value > 0 ? `+${formattedBase}` : formattedBase;
   const sliderClass = "harmoniq-master-slider";
   return (
@@ -112,7 +138,11 @@ function MasterControlSlider({
         value={value}
         onChange={(event) => {
           const raw = Number(event.currentTarget.value);
-          onChange(step < 1 ? Number(raw.toFixed(1)) : raw);
+          if (precision > 0) {
+            onChange(Number(raw.toFixed(precision)));
+          } else {
+            onChange(Math.round(raw));
+          }
         }}
         className={sliderClass}
         style={{
@@ -319,6 +349,51 @@ const STEM_BADGE_COLORS: Record<StemStatus, { background: string; border: string
     text: "rgba(255, 189, 214, 0.9)",
   },
 };
+
+const FX_BANK: Array<{ id: DeckFxId; label: string; accent: string; glow: string; description: string }> = [
+  {
+    id: "reverb",
+    label: "Reverb",
+    accent: "rgba(126, 244, 255, 0.85)",
+    glow: "0 0 16px rgba(126, 244, 255, 0.45)",
+    description: "Expands the deck into a wide ambient space",
+  },
+  {
+    id: "rhythmicGate",
+    label: "Gate",
+    accent: "rgba(255, 197, 137, 0.85)",
+    glow: "0 0 16px rgba(255, 197, 137, 0.4)",
+    description: "Applies a tempo-synced rhythmic gate",
+  },
+  {
+    id: "stutter",
+    label: "Stutter",
+    accent: "rgba(132, 94, 255, 0.85)",
+    glow: "0 0 16px rgba(132, 94, 255, 0.45)",
+    description: "Slices audio into tight repeats",
+  },
+  {
+    id: "glitch",
+    label: "Glitch",
+    accent: "rgba(255, 148, 241, 0.85)",
+    glow: "0 0 16px rgba(255, 148, 241, 0.45)",
+    description: "Adds scattershot glitch texture",
+  },
+  {
+    id: "crush",
+    label: "Crush",
+    accent: "rgba(255, 112, 173, 0.85)",
+    glow: "0 0 16px rgba(255, 112, 173, 0.45)",
+    description: "Bit crushes and saturates the signal",
+  },
+  {
+    id: "phaser",
+    label: "Phaser",
+    accent: "rgba(120, 203, 220, 0.85)",
+    glow: "0 0 16px rgba(120, 203, 220, 0.45)",
+    description: "Sweeps a silky phaser through the deck",
+  },
+];
 
 function formatStemLabel(stem: StemType) {
   return stem.charAt(0).toUpperCase() + stem.slice(1);
@@ -561,12 +636,20 @@ export function DeckMatrix({
   onToggleLoopSlot,
   masterTempo,
   masterPitch,
+  masterTrim,
   onMasterTempoChange,
   onMasterPitchChange,
+  onMasterTrimChange,
   onToggleEq,
   onTriggerStem,
+  onToggleFx,
+  onTogglePlayback,
+  onSeekRatio,
+  onRetryPlayback,
 }: DeckMatrixProps) {
   const gesture = useRef<GestureState | null>(null);
+  const fxCooldown = useRef<Map<string, number>>(new Map());
+  const [waveformHover, setWaveformHover] = useState<{ deckId: DeckId; ratio: number } | null>(null);
   const deckLookup = useMemo(() => new Map(decks.map((deck) => [deck.id, deck])), [decks]);
 
   const crossWeights = useMemo(() => {
@@ -590,12 +673,49 @@ export function DeckMatrix({
     const leftBlend = crossWeights.A * deck("A") + crossWeights.C * deck("C");
     const rightBlend = crossWeights.B * deck("B") + crossWeights.D * deck("D");
     return {
-      left: clamp(leftBlend, 0, 1),
-      right: clamp(rightBlend, 0, 1),
-      top: clamp(topBlend, 0, 1),
-      bottom: clamp(bottomBlend, 0, 1),
+      left: clamp(leftBlend * masterTrim, 0, 1),
+      right: clamp(rightBlend * masterTrim, 0, 1),
+      top: clamp(topBlend * masterTrim, 0, 1),
+      bottom: clamp(bottomBlend * masterTrim, 0, 1),
     };
-  }, [crossWeights, deckLookup]);
+  }, [crossWeights, deckLookup, masterTrim]);
+
+  const handleWaveformPointerMove = useCallback(
+    (deckId: DeckId) => (event: PointerEvent<HTMLDivElement>) => {
+      const deck = deckLookup.get(deckId);
+      if (!deck?.durationSeconds || deck.durationSeconds <= 0) {
+        setWaveformHover(null);
+        return;
+      }
+      const rect = event.currentTarget.getBoundingClientRect();
+      const ratio = rect.width > 0 ? clamp((event.clientX - rect.left) / rect.width, 0, 1) : 0;
+      setWaveformHover({ deckId, ratio });
+    },
+    [deckLookup],
+  );
+
+  const handleWaveformPointerLeave = useCallback(
+    (deckId: DeckId) => () => {
+      setWaveformHover((state) => (state?.deckId === deckId ? null : state));
+    },
+    [],
+  );
+
+  const handleWaveformSeek = useCallback(
+    (deckId: DeckId) => (event: PointerEvent<HTMLDivElement>) => {
+      event.preventDefault();
+      event.stopPropagation();
+      const deck = deckLookup.get(deckId);
+      if (!deck?.durationSeconds || deck.durationSeconds <= 0) {
+        return;
+      }
+      const rect = event.currentTarget.getBoundingClientRect();
+      const ratio = rect.width > 0 ? clamp((event.clientX - rect.left) / rect.width, 0, 1) : 0;
+      onSeekRatio(deckId, ratio);
+      setWaveformHover({ deckId, ratio });
+    },
+    [deckLookup, onSeekRatio],
+  );
 
   const ensureGesture = (deckId: DeckId) => {
     const deck = deckLookup.get(deckId);
@@ -673,6 +793,17 @@ export function DeckMatrix({
     if (state.pointers.size === 0) {
       gesture.current = null;
     }
+  };
+
+  const handleFxButton = (deckId: DeckId, effectId: DeckFxId) => {
+    const now = typeof performance !== "undefined" ? performance.now() : Date.now();
+    const key = `${deckId}-${effectId}`;
+    const last = fxCooldown.current.get(key) ?? 0;
+    if (now - last < 140) {
+      return;
+    }
+    fxCooldown.current.set(key, now);
+    onToggleFx(deckId, effectId);
   };
 
   const deckOrder: DeckId[] = ["A", "B", "C", "D"];
@@ -753,7 +884,21 @@ export function DeckMatrix({
           const position = deckPositions[id];
           const loopPosition = loopStripPositions[id];
           const weight = crossWeights[id];
-          const levelHeight = `${Math.round(deck.level * 100)}%`;
+          const vuLevel = clamp(deck.vu ?? deck.level ?? 0, 0, 1);
+          const levelHeight = `${Math.round(vuLevel * 100)}%`;
+          const durationSeconds = deck.durationSeconds ?? null;
+          const currentTimeSeconds = deck.currentTimeSeconds ?? 0;
+          const progressRatio =
+            durationSeconds && durationSeconds > 0
+              ? clamp(currentTimeSeconds / durationSeconds, 0, 1)
+              : 0;
+          const formattedCurrent = formatTime(currentTimeSeconds);
+          const formattedDuration = formatTime(durationSeconds);
+          const hasDuration = Boolean(durationSeconds && durationSeconds > 0);
+          const hoverRatio = waveformHover?.deckId === deck.id ? waveformHover.ratio : null;
+          const hoverSeconds = hasDuration && hoverRatio !== null ? ratioToSeconds(hoverRatio, durationSeconds) : null;
+          const hoverLabel = hoverSeconds !== null ? formatTime(hoverSeconds) : null;
+          const showHover = hoverLabel !== null && hoverRatio !== null;
           const loops = loopSlots[deck.id] ?? [];
           return (
             <Fragment key={deck.id}>
@@ -792,14 +937,41 @@ export function DeckMatrix({
                 }}
               >
                 <header style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
-                  <div style={{ display: "grid", gap: "4px" }}>
-                    <strong style={{ fontSize: "0.9rem" }}>Deck {deck.id}</strong>
-                    <span style={{ fontSize: "0.7rem", color: theme.textMuted }}>{deck.loopName}</span>
-                    {deck.source ? (
-                      <span style={{ fontSize: "0.64rem", color: theme.button.primaryText }}>
-                        {deck.source}
-                      </span>
-                    ) : null}
+                  <div style={{ display: "flex", alignItems: "center", gap: "12px", flexWrap: "wrap" }}>
+                    <button
+                      type="button"
+                      onClick={() => onTogglePlayback(deck.id)}
+                      style={{
+                        ...toolbarButtonStyle,
+                        padding: "6px 12px",
+                        fontSize: "0.74rem",
+                        display: "inline-flex",
+                        alignItems: "center",
+                        gap: "6px",
+                        background: deck.isPlaying
+                          ? "rgba(103, 255, 230, 0.85)"
+                          : "rgba(9, 32, 44, 0.75)",
+                        color: deck.isPlaying
+                          ? "rgba(8, 22, 30, 0.92)"
+                          : theme.button.primaryText,
+                        borderColor: deck.isPlaying
+                          ? "rgba(103, 255, 230, 0.9)"
+                          : "rgba(120, 203, 220, 0.35)",
+                        boxShadow: deck.isPlaying ? "0 0 12px rgba(103, 255, 230, 0.45)" : "none",
+                      }}
+                    >
+                      <span aria-hidden="true">{deck.isPlaying ? "■" : "▶"}</span>
+                      {deck.isPlaying ? "Stop" : "Play"}
+                    </button>
+                    <div style={{ display: "grid", gap: "4px" }}>
+                      <strong style={{ fontSize: "0.9rem" }}>Deck {deck.id}</strong>
+                      <span style={{ fontSize: "0.7rem", color: theme.textMuted }}>{deck.loopName}</span>
+                      {deck.source ? (
+                        <span style={{ fontSize: "0.64rem", color: theme.button.primaryText }}>
+                          {deck.source}
+                        </span>
+                      ) : null}
+                    </div>
                   </div>
                   <div style={{ textAlign: "right", display: "grid", gap: "4px" }}>
                     {deck.bpm ? (
@@ -810,15 +982,50 @@ export function DeckMatrix({
                     {deck.scale ? (
                       <span style={{ fontSize: "0.67rem", color: theme.textMuted }}>Scale {deck.scale}</span>
                     ) : null}
-                    <span style={{ fontSize: "0.67rem", color: theme.textMuted }}>Zoom ×{deck.zoom.toFixed(2)}</span>
                     <span style={{ fontSize: "0.67rem", color: theme.textMuted }}>
-                      Filter {Math.round(deck.filter * 100)}%
+                      Time {formattedCurrent} / {formattedDuration}
+                    </span>
+                    <span style={{ fontSize: "0.67rem", color: theme.textMuted }}>
+                      Zoom ×{deck.zoom.toFixed(2)} · Filter {Math.round(deck.filter * 100)}%
                     </span>
                     <span style={{ fontSize: "0.67rem", color: theme.button.primary }}>
                       Blend {Math.round(weight * 100)}%
                     </span>
                   </div>
                 </header>
+                {deck.playbackError ? (
+                  <div
+                    role="alert"
+                    style={{
+                      display: "flex",
+                      justifyContent: "space-between",
+                      alignItems: "center",
+                      gap: "12px",
+                      padding: "10px 12px",
+                      borderRadius: "10px",
+                      border: "1px solid rgba(255, 147, 190, 0.6)",
+                      background: "rgba(255, 86, 134, 0.12)",
+                      color: "rgba(255, 189, 214, 0.95)",
+                      fontSize: "0.66rem",
+                    }}
+                  >
+                    <span>{deck.playbackError}</span>
+                    <button
+                      type="button"
+                      onClick={() => onRetryPlayback(deck.id)}
+                      style={{
+                        ...toolbarButtonStyle,
+                        padding: "4px 10px",
+                        fontSize: "0.65rem",
+                        background: "rgba(255, 189, 214, 0.2)",
+                        borderColor: "rgba(255, 189, 214, 0.6)",
+                        color: theme.button.primaryText,
+                      }}
+                    >
+                      Retry
+                    </button>
+                  </div>
+                ) : null}
                 {deck.stems && deck.stems.length ? (
                   <div style={{ display: "flex", flexWrap: "wrap", gap: "8px" }}>
                     {deck.stems.map((stem) => {
@@ -947,6 +1154,16 @@ export function DeckMatrix({
                   <div
                     style={{
                       position: "absolute",
+                      inset: 0,
+                      width: `${Math.max(progressRatio * 100, 0)}%`,
+                      background: "linear-gradient(90deg, rgba(103, 255, 230, 0.15), rgba(132, 94, 255, 0.2))",
+                      pointerEvents: "none",
+                      transition: "width 0.2s ease",
+                    }}
+                  />
+                  <div
+                    style={{
+                      position: "absolute",
                       top: "14px",
                       right: "14px",
                       width: "12px",
@@ -994,8 +1211,60 @@ export function DeckMatrix({
                       }}
                     />
                   </div>
+                  {showHover && hoverRatio !== null && hoverLabel ? (
+                    <>
+                      <div
+                        style={{
+                          position: "absolute",
+                          top: "12px",
+                          bottom: "12px",
+                          left: `${hoverRatio * 100}%`,
+                          width: "2px",
+                          background: "rgba(255, 255, 255, 0.35)",
+                          pointerEvents: "none",
+                        }}
+                      />
+                      <div
+                        style={{
+                          position: "absolute",
+                          left: `${hoverRatio * 100}%`,
+                          bottom: "8px",
+                          transform: "translate(-50%, 0)",
+                          background: "rgba(6, 24, 34, 0.88)",
+                          color: theme.button.primaryText,
+                          border: "1px solid rgba(120, 203, 220, 0.35)",
+                          borderRadius: "8px",
+                          padding: "4px 8px",
+                          fontSize: "0.62rem",
+                          letterSpacing: "0.05em",
+                          pointerEvents: "none",
+                          boxShadow: "0 6px 16px rgba(0, 0, 0, 0.35)",
+                        }}
+                      >
+                        {hoverLabel}
+                      </div>
+                    </>
+                  ) : null}
+                  <div
+                    onPointerMove={handleWaveformPointerMove(deck.id)}
+                    onPointerLeave={handleWaveformPointerLeave(deck.id)}
+                    onPointerDown={handleWaveformSeek(deck.id)}
+                    style={{
+                      position: "absolute",
+                      inset: 0,
+                      cursor: hasDuration ? "pointer" : "default",
+                    }}
+                  />
                 </div>
-              <div style={{ display: "flex", justifyContent: "space-between", gap: "10px", alignItems: "center" }}>
+              <div
+                style={{
+                  display: "flex",
+                  justifyContent: "space-between",
+                  gap: "10px",
+                  alignItems: "center",
+                  flexWrap: "wrap",
+                }}
+              >
                 <div style={{ display: "flex", gap: "8px" }}>
                   <button
                     type="button"
@@ -1012,23 +1281,40 @@ export function DeckMatrix({
                     Nudge +
                   </button>
                 </div>
-                <div style={{ display: "flex", gap: "6px", flexWrap: "wrap", justifyContent: "flex-end" }}>
-                  {deck.fxStack.map((fx) => (
-                    <span
-                      key={fx}
-                      style={{
-                        padding: "4px 10px",
-                        borderRadius: "999px",
-                        background: "rgba(30, 72, 102, 0.7)",
-                        border: `1px solid rgba(120, 203, 220, 0.4)`,
-                        fontSize: "0.65rem",
-                        letterSpacing: "0.06em",
-                        textTransform: "uppercase",
-                      }}
-                    >
-                      {fx}
-                    </span>
-                  ))}
+                <div
+                  style={{
+                    display: "grid",
+                    gridTemplateColumns: "repeat(3, minmax(0, 1fr))",
+                    gap: "6px",
+                    minWidth: "220px",
+                  }}
+                >
+                  {FX_BANK.map((effect) => {
+                    const isActive = deck.fxActive[effect.id];
+                    return (
+                      <button
+                        key={effect.id}
+                        type="button"
+                        aria-pressed={isActive}
+                        title={effect.description}
+                        onClick={() => handleFxButton(deck.id, effect.id)}
+                        style={{
+                          ...toolbarButtonStyle,
+                          padding: "6px 10px",
+                          fontSize: "0.62rem",
+                          background: isActive ? effect.accent : "rgba(9, 32, 44, 0.75)",
+                          color: isActive ? "rgba(6, 18, 26, 0.92)" : theme.text,
+                          borderColor: isActive ? effect.accent : "rgba(120, 203, 220, 0.3)",
+                          boxShadow: isActive ? effect.glow : "none",
+                          textTransform: "uppercase",
+                          letterSpacing: "0.06em",
+                          transition: "background 0.2s ease, box-shadow 0.2s ease",
+                        }}
+                      >
+                        {effect.label}
+                      </button>
+                    );
+                  })}
                 </div>
               </div>
               </article>
@@ -1065,12 +1351,13 @@ export function DeckMatrix({
               <span>
                 Pitch {masterPitch > 0 ? `+${masterPitch.toFixed(1)}` : masterPitch.toFixed(1)} st
               </span>
+              <span>Output {Math.round(masterTrim * 100)}%</span>
             </span>
           </div>
           <div
             style={{
               display: "grid",
-              gridTemplateColumns: "repeat(2, minmax(0, 1fr))",
+              gridTemplateColumns: "repeat(3, minmax(0, 1fr))",
               gap: "12px",
             }}
           >
@@ -1091,6 +1378,15 @@ export function DeckMatrix({
               step={0.1}
               suffix="st"
               onChange={onMasterPitchChange}
+            />
+            <MasterControlSlider
+              label="Output"
+              value={masterTrim}
+              min={0.4}
+              max={1.4}
+              step={0.05}
+              suffix="×"
+              onChange={onMasterTrimChange}
             />
           </div>
           <div

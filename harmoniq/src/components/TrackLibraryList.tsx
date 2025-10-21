@@ -2,6 +2,16 @@ import { theme } from "@daw/theme";
 import type { DeckId } from "../types";
 import type { AnalyzedTrackSummary } from "./TrackUploadPanel";
 
+function formatDuration(duration: number | null): string {
+  if (!duration || Number.isNaN(duration)) {
+    return "–";
+  }
+  const totalSeconds = Math.max(0, Math.round(duration));
+  const minutes = Math.floor(totalSeconds / 60);
+  const seconds = totalSeconds % 60;
+  return `${minutes}:${seconds.toString().padStart(2, "0")}`;
+}
+
 export interface TrackLibraryListProps {
   tracks: AnalyzedTrackSummary[];
   onLoad: (deckId: DeckId, track: AnalyzedTrackSummary) => void;
@@ -51,8 +61,26 @@ export function TrackLibraryList({ tracks, onLoad }: TrackLibraryListProps) {
                 {track.bpm} BPM
               </span>
               <span style={{ fontSize: "0.7rem", color: theme.textMuted }}>Scale {track.scale}</span>
+              <span style={{ fontSize: "0.7rem", color: theme.textMuted }}>
+                Length {formatDuration(track.durationSeconds)}
+              </span>
             </div>
           </header>
+          {track.analysisError ? (
+            <div
+              role="status"
+              style={{
+                borderRadius: "10px",
+                border: "1px solid rgba(255, 147, 190, 0.6)",
+                background: "rgba(255, 86, 134, 0.15)",
+                color: "rgba(255, 189, 214, 0.95)",
+                fontSize: "0.68rem",
+                padding: "8px 10px",
+              }}
+            >
+              {track.analysisError}
+            </div>
+          ) : null}
           <div style={{ display: "flex", flexWrap: "wrap", gap: "8px" }}>
             {track.stems.map((stem) => (
               <span
@@ -78,16 +106,20 @@ export function TrackLibraryList({ tracks, onLoad }: TrackLibraryListProps) {
                 key={deck}
                 type="button"
                 onClick={() => onLoad(deck, track)}
+                disabled={Boolean(track.analysisError)}
                 style={{
                   padding: "8px 12px",
                   borderRadius: "10px",
                   border: "1px solid rgba(120, 203, 220, 0.3)",
-                  background: "rgba(10, 36, 48, 0.75)",
-                  color: theme.button.primaryText,
+                  background: track.analysisError
+                    ? "rgba(60, 22, 36, 0.6)"
+                    : "rgba(10, 36, 48, 0.75)",
+                  color: track.analysisError ? "rgba(255, 189, 214, 0.8)" : theme.button.primaryText,
                   fontSize: "0.7rem",
                   letterSpacing: "0.06em",
                   textTransform: "uppercase",
-                  cursor: "pointer",
+                  cursor: track.analysisError ? "not-allowed" : "pointer",
+                  opacity: track.analysisError ? 0.75 : 1,
                 }}
               >
                 Load Deck {deck}
