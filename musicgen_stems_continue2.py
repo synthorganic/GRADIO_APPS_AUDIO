@@ -80,7 +80,28 @@ except Exception:  # pragma: no cover - allow import without torch
     )
     F = types.SimpleNamespace()
 
-_, gr = _optional_import("gradio", {"Error": Exception})
+GRADIO_INSTALL_HINT = (
+    "Gradio is required to launch the MusicGen interface. Install it with "
+    "`pip install -r musicgen_pywebview_requirements.txt` or `pip install gradio`."
+)
+
+
+GRADIO_AVAILABLE, _gradio = _optional_import("gradio")
+
+
+class _MissingDependencyProxy:
+    """Lazy proxy that raises a helpful error when a module is missing."""
+
+    Error = RuntimeError
+
+    def __init__(self, module_hint: str) -> None:
+        self._module_hint = module_hint
+
+    def __getattr__(self, name: str):  # pragma: no cover - only hits in error paths
+        raise ModuleNotFoundError(self._module_hint) from None
+
+
+gr = _gradio if GRADIO_AVAILABLE else _MissingDependencyProxy(GRADIO_INSTALL_HINT)
 
 # ``audiocraft`` is a heavy optional dependency. Importing this module should
 # not fail if it is missing, so we provide minimal placeholders when the
@@ -2571,6 +2592,9 @@ def _analyze_and_rename_batch_files(
 # UI (tabs, all Enqueue) [ALTERED]
 # ============================================================================
 def ui_full(launch_kwargs):
+    if not GRADIO_AVAILABLE:
+        raise ModuleNotFoundError(GRADIO_INSTALL_HINT)
+
     # Ensure the output directory is always allowed for file serving
     launch_kwargs = dict(launch_kwargs)
     allowed_paths = list(launch_kwargs.get("allowed_paths", []))

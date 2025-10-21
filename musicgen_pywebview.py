@@ -29,7 +29,15 @@ def _launch_musicgen_server(host: str, port: int) -> None:
     warnings.filterwarnings("ignore", category=UserWarning)
     logging.basicConfig(level=logging.INFO)
 
-    from musicgen_stems_continue2 import TMP_DIR, ui_full
+    from musicgen_stems_continue2 import (
+        GRADIO_AVAILABLE,
+        GRADIO_INSTALL_HINT,
+        TMP_DIR,
+        ui_full,
+    )
+
+    if not GRADIO_AVAILABLE:
+        raise SystemExit(GRADIO_INSTALL_HINT)
 
     ui_full(
         {
