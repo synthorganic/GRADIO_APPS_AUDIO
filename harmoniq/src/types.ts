@@ -15,9 +15,12 @@ export type DeckFxId = "reverb" | "rhythmicGate" | "stutter" | "glitch" | "crush
 
 export type DeckFxParams = Record<string, number | string>;
 
+export type EqBandId = "highs" | "mids" | "lows";
+
 export interface DeckStem {
   id: string;
   label: string;
+  type: StemType;
   status: StemStatus;
 }
 
@@ -34,7 +37,7 @@ export interface DeckPerformance {
   bpm?: number;
   tonalKey?: string;
   mood?: string;
-  eqCuts: Record<"highs" | "mids" | "lows", boolean>;
+  eqCuts: Record<EqBandId, boolean>;
   activeStem: StemType | null;
   queuedStem: StemType | null;
   stemStatus: "main" | "queued" | "stem";

@@ -2,6 +2,15 @@
 
 Harmoniq is a browser-based loop performance surface that shares theme, layout, and state patterns with the `daw-mixer` reference experience in this repository. The app persists loop libraries locally so Camelot-key track selection stays hydrated and keeps uploaded tracks ready for deck assignment. The lower library strip now focuses purely on the upload panel and analyzed track list—automation envelopes, active deck dashboards, and saved loop folders have been retired to keep the workflow lean.
 
+Real-time automation inside Harmoniq is intentionally minimal: holding the **Play** button performs a smooth fade-in and holding **Stop** performs the matching fade-out. Any deeper envelope editing or playback automation remains in the `daw-mixer` project.
+
+## Audio engine integration highlights
+
+- **Deck EQ cuts** now drive three overlapping filters inside the `HarmoniqAudioBridge`, so the Hi/Mid/Low Cut buttons reshape the signal instead of toggling UI state.
+- **Stem triggers** map to bridge stem profiles that rebalance the deck’s multiband split, muting and boosting regions to spotlight drums, synths, or vocals without reloading audio files.
+- **Loop capture** routes the recorder strip through ScriptProcessor nodes to print bar- or half-bar loops, reloading the rendered WAV back onto the focused deck and persisting it to the loop library.
+- **Track analysis** performs DSP-based tempo, Camelot key, and stem energy detection during upload, ensuring the library metadata mirrors the actual audio instead of placeholder hashes.
+
 ## Getting started
 
 1. **Install dependencies**

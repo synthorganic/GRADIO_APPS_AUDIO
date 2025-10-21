@@ -1,4 +1,12 @@
-import type { DeckAudioSource, DeckFxId, DeckFxParams, DeckId, DeckPlaybackDiagnostics } from "../types";
+import type {
+  DeckAudioSource,
+  DeckFxId,
+  DeckFxParams,
+  DeckId,
+  DeckPlaybackDiagnostics,
+  EqBandId,
+  StemType,
+} from "../types";
 
 const FX_ORDER: DeckFxId[] = ["rhythmicGate", "stutter", "glitch", "crush", "phaser", "reverb"];
 
@@ -9,8 +17,22 @@ interface EffectStage {
   dispose(): void;
 }
 
+interface StemBand {
+  filter: BiquadFilterNode;
+  gain: GainNode;
+}
+
 interface DeckNodes {
   input: GainNode;
+  eq: Record<EqBandId, BiquadFilterNode>;
+  stems: {
+    low: StemBand;
+    mid: StemBand;
+    high: StemBand;
+    mix: GainNode;
+  };
+  captureTap: GainNode;
+  captureMonitor: GainNode;
   level: GainNode;
   effects: Map<DeckFxId, EffectStage>;
   meterTap: GainNode;
@@ -499,6 +521,17 @@ interface DeckPlaybackInternal {
 
 type DiagnosticsListener = (snapshot: DeckPlaybackDiagnostics) => void;
 
+interface LoopCaptureSession {
+  deckId: DeckId;
+  processor: ScriptProcessorNode;
+  monitor: GainNode;
+  buffers: Float32Array[][];
+  durationSeconds: number;
+  resolve: (result: { buffer: AudioBuffer; durationSeconds: number }) => void;
+  reject: (error: Error) => void;
+  timer: ReturnType<typeof setTimeout> | null;
+}
+
 interface HarmoniqAudioBridgeOptions {
   context?: AudioContext;
   logger?: (...args: unknown[]) => void;
@@ -516,6 +549,10 @@ export class HarmoniqAudioBridge {
   private deckGains = new Map<DeckId, number>();
 
   private effectStates = new Map<DeckId, Map<DeckFxId, boolean>>();
+
+  private eqStates = new Map<DeckId, Record<EqBandId, boolean>>();
+
+  private stemStates = new Map<DeckId, StemType | null>();
 
   private masterTrim = 0.9;
 
@@ -536,6 +573,8 @@ export class HarmoniqAudioBridge {
   private playback = new Map<DeckId, DeckPlaybackInternal>();
 
   private diagnosticsListeners = new Set<DiagnosticsListener>();
+
+  private loopCaptures = new Map<DeckId, LoopCaptureSession>();
 
   constructor(options: HarmoniqAudioBridgeOptions = {}) {
     this.injectedContext = options.context ?? null;
@@ -604,9 +643,46 @@ export class HarmoniqAudioBridge {
       return deck;
     }
     const input = context.createGain();
+    const eqLows = context.createBiquadFilter();
+    eqLows.type = "highpass";
+    eqLows.frequency.value = 24;
+    eqLows.Q.value = 0.707;
+    const eqMids = context.createBiquadFilter();
+    eqMids.type = "peaking";
+    eqMids.frequency.value = 1200;
+    eqMids.Q.value = 0.9;
+    eqMids.gain.value = 0;
+    const eqHighs = context.createBiquadFilter();
+    eqHighs.type = "lowpass";
+    eqHighs.frequency.value = 18000;
+    eqHighs.Q.value = 0.6;
+    const stemLowFilter = context.createBiquadFilter();
+    stemLowFilter.type = "lowpass";
+    stemLowFilter.frequency.value = 220;
+    stemLowFilter.Q.value = 0.9;
+    const stemLowGain = context.createGain();
+    stemLowGain.gain.value = 1;
+    const stemMidFilter = context.createBiquadFilter();
+    stemMidFilter.type = "bandpass";
+    stemMidFilter.frequency.value = 1200;
+    stemMidFilter.Q.value = 1.2;
+    const stemMidGain = context.createGain();
+    stemMidGain.gain.value = 1;
+    const stemHighFilter = context.createBiquadFilter();
+    stemHighFilter.type = "highpass";
+    stemHighFilter.frequency.value = 3200;
+    stemHighFilter.Q.value = 0.8;
+    const stemHighGain = context.createGain();
+    stemHighGain.gain.value = 1;
+    const stemMix = context.createGain();
+    stemMix.gain.value = 1;
     const level = context.createGain();
     level.gain.value = 0;
     const master = this.ensureMaster(context);
+    const captureTap = context.createGain();
+    captureTap.gain.value = 1;
+    const captureMonitor = context.createGain();
+    captureMonitor.gain.value = 0;
     const meterTap = context.createGain();
     const analyser = context.createAnalyser();
     analyser.fftSize = 512;
@@ -614,10 +690,29 @@ export class HarmoniqAudioBridge {
     meterTap.connect(level);
     meterTap.connect(analyser);
     level.connect(master);
+    captureMonitor.connect(master);
     const meterData = new Float32Array(analyser.fftSize) as MeterArray;
-    deck = { input, level, effects: new Map(), meterTap, analyser, meterData };
+    deck = {
+      input,
+      eq: { lows: eqLows, mids: eqMids, highs: eqHighs },
+      stems: {
+        low: { filter: stemLowFilter, gain: stemLowGain },
+        mid: { filter: stemMidFilter, gain: stemMidGain },
+        high: { filter: stemHighFilter, gain: stemHighGain },
+        mix: stemMix,
+      },
+      captureTap,
+      captureMonitor,
+      level,
+      effects: new Map(),
+      meterTap,
+      analyser,
+      meterData,
+    };
     this.decks.set(deckId, deck);
     this.effectStates.set(deckId, new Map());
+    this.eqStates.set(deckId, { highs: false, mids: false, lows: false });
+    this.stemStates.set(deckId, null);
     this.rebuildDeckChain(deckId);
     return deck;
   }
@@ -678,11 +773,228 @@ export class HarmoniqAudioBridge {
     }
   }
 
+  setEqCut(deckId: DeckId, band: EqBandId, enabled: boolean) {
+    const context = this.getContext();
+    if (!context) return;
+    const deck = this.ensureDeck(context, deckId);
+    const states = this.eqStates.get(deckId) ?? { highs: false, mids: false, lows: false };
+    if (states[band] === enabled) {
+      return;
+    }
+    const now = context.currentTime;
+    switch (band) {
+      case "lows":
+        deck.eq.lows.frequency.setTargetAtTime(enabled ? 180 : 24, now, 0.08);
+        deck.eq.lows.Q.setTargetAtTime(enabled ? 0.95 : 0.707, now, 0.08);
+        break;
+      case "mids":
+        deck.eq.mids.gain.setTargetAtTime(enabled ? -9 : 0, now, 0.06);
+        deck.eq.mids.frequency.setTargetAtTime(enabled ? 1100 : 1200, now, 0.1);
+        deck.eq.mids.Q.setTargetAtTime(enabled ? 1.35 : 0.9, now, 0.1);
+        break;
+      case "highs":
+        deck.eq.highs.frequency.setTargetAtTime(enabled ? 5400 : 18000, now, 0.1);
+        deck.eq.highs.Q.setTargetAtTime(enabled ? 0.9 : 0.6, now, 0.1);
+        break;
+      default:
+        break;
+    }
+    states[band] = enabled;
+    this.eqStates.set(deckId, states);
+  }
+
+  setStemProfile(deckId: DeckId, stem: StemType | null) {
+    const context = this.getContext();
+    if (!context) return;
+    const deck = this.ensureDeck(context, deckId);
+    const current = this.stemStates.get(deckId) ?? null;
+    if (current === stem) {
+      return;
+    }
+    const now = context.currentTime;
+    const profile = stem
+      ? stem === "drums"
+        ? { low: 1.15, mid: 0.35, high: 0.2, lowFreq: 280, midFreq: 980, highFreq: 3600 }
+        : stem === "synths"
+        ? { low: 0.35, mid: 1.1, high: 0.55, lowFreq: 200, midFreq: 1500, highFreq: 4200 }
+        : { low: 0.25, mid: 0.5, high: 1.1, lowFreq: 220, midFreq: 1700, highFreq: 5200 }
+      : { low: 1, mid: 1, high: 1, lowFreq: 220, midFreq: 1200, highFreq: 3200 };
+    deck.stems.low.gain.gain.setTargetAtTime(profile.low, now, 0.08);
+    deck.stems.mid.gain.gain.setTargetAtTime(profile.mid, now, 0.08);
+    deck.stems.high.gain.gain.setTargetAtTime(profile.high, now, 0.08);
+    deck.stems.low.filter.frequency.setTargetAtTime(profile.lowFreq, now, 0.1);
+    deck.stems.mid.filter.frequency.setTargetAtTime(profile.midFreq, now, 0.1);
+    deck.stems.high.filter.frequency.setTargetAtTime(profile.highFreq, now, 0.1);
+    this.stemStates.set(deckId, stem ?? null);
+  }
+
+  startLoopCapture(deckId: DeckId, durationSeconds: number): Promise<{ buffer: AudioBuffer; durationSeconds: number }> {
+    const context = this.getContext();
+    if (!context) {
+      return Promise.reject(new Error("Audio engine unavailable"));
+    }
+    if (!Number.isFinite(durationSeconds) || durationSeconds <= 0) {
+      return Promise.reject(new Error("Capture duration must be positive"));
+    }
+    this.ensureDeck(context, deckId);
+    const existing = this.loopCaptures.get(deckId);
+    if (existing) {
+      this.debug(`cancelling existing loop capture for deck ${deckId}`);
+      this.cancelLoopCapture(deckId);
+    }
+    return new Promise((resolve, reject) => {
+      try {
+        const deck = this.ensureDeck(context, deckId);
+        const processor = context.createScriptProcessor(4096, 2, 2);
+        const buffers: Float32Array[][] = [[], []];
+        processor.onaudioprocess = (event) => {
+          const input = event.inputBuffer;
+          const channelCount = Math.min(2, input.numberOfChannels);
+          for (let channel = 0; channel < channelCount; channel += 1) {
+            const chunk = new Float32Array(input.length);
+            input.copyFromChannel(chunk, channel);
+            buffers[channel].push(chunk);
+          }
+          for (let channel = channelCount; channel < buffers.length; channel += 1) {
+            if (!buffers[channel]) {
+              buffers[channel] = [];
+            }
+          }
+        };
+        deck.captureTap.connect(processor);
+        processor.connect(deck.captureMonitor);
+        const session: LoopCaptureSession = {
+          deckId,
+          processor,
+          monitor: deck.captureMonitor,
+          buffers,
+          durationSeconds,
+          resolve,
+          reject,
+          timer: null,
+        };
+        const delay = Math.max(10, durationSeconds * 1000);
+        session.timer = setTimeout(() => {
+          void this.finalizeLoopCapture(deckId).catch((error) => {
+            session.reject(error instanceof Error ? error : new Error(String(error)));
+          });
+        }, delay);
+        this.loopCaptures.set(deckId, session);
+      } catch (error) {
+        reject(error instanceof Error ? error : new Error(String(error)));
+      }
+    });
+  }
+
+  cancelLoopCapture(deckId: DeckId) {
+    void this.finalizeLoopCapture(deckId, true).catch((error) => {
+      this.debug(`error while cancelling loop capture for deck ${deckId}`, error);
+    });
+  }
+
+  private async finalizeLoopCapture(deckId: DeckId, cancelled = false): Promise<void> {
+    const session = this.loopCaptures.get(deckId);
+    if (!session) {
+      return;
+    }
+    if (session.timer) {
+      clearTimeout(session.timer);
+      session.timer = null;
+    }
+    this.loopCaptures.delete(deckId);
+    try {
+      session.processor.onaudioprocess = null;
+    } catch {}
+    try {
+      session.processor.disconnect();
+    } catch {}
+    const deck = this.decks.get(deckId);
+    if (deck) {
+      try {
+        deck.captureTap.disconnect(session.processor);
+      } catch {}
+    }
+    if (cancelled) {
+      session.reject(new Error("Loop capture cancelled"));
+      return;
+    }
+    try {
+      const context = this.getContext();
+      if (!context) {
+        throw new Error("Audio engine unavailable");
+      }
+      const channelCount = Math.max(1, session.buffers.length);
+      const totalSamplesPerChannel = session.buffers.map((chunks) =>
+        chunks.reduce((sum, chunk) => sum + chunk.length, 0),
+      );
+      const expectedFrames = Math.max(1, Math.floor(session.durationSeconds * context.sampleRate));
+      const availableSamples = totalSamplesPerChannel.reduce(
+        (min, value) => Math.min(min, value || 0),
+        Number.POSITIVE_INFINITY,
+      );
+      const usableSamples = Number.isFinite(availableSamples)
+        ? Math.max(1, availableSamples)
+        : expectedFrames;
+      const frameCount = Math.max(1, Math.min(expectedFrames, usableSamples));
+      const result = context.createBuffer(channelCount, frameCount, context.sampleRate);
+      for (let channel = 0; channel < channelCount; channel += 1) {
+        const channelData = result.getChannelData(channel);
+        const chunks = session.buffers[channel] ?? [];
+        let offset = 0;
+        for (const chunk of chunks) {
+          const remaining = frameCount - offset;
+          if (remaining <= 0) {
+            break;
+          }
+          const toCopy = Math.min(remaining, chunk.length);
+          channelData.set(chunk.subarray(0, toCopy), offset);
+          offset += toCopy;
+        }
+      }
+      session.resolve({ buffer: result, durationSeconds: frameCount / context.sampleRate });
+    } catch (error) {
+      session.reject(error instanceof Error ? error : new Error(String(error)));
+    }
+  }
+
   private rebuildDeckChain(deckId: DeckId) {
     const deck = this.decks.get(deckId);
     if (!deck) return;
     try {
       deck.input.disconnect();
+    } catch {}
+    try {
+      deck.eq.lows.disconnect();
+    } catch {}
+    try {
+      deck.eq.mids.disconnect();
+    } catch {}
+    try {
+      deck.eq.highs.disconnect();
+    } catch {}
+    try {
+      deck.stems.low.filter.disconnect();
+    } catch {}
+    try {
+      deck.stems.mid.filter.disconnect();
+    } catch {}
+    try {
+      deck.stems.high.filter.disconnect();
+    } catch {}
+    try {
+      deck.stems.low.gain.disconnect();
+    } catch {}
+    try {
+      deck.stems.mid.gain.disconnect();
+    } catch {}
+    try {
+      deck.stems.high.gain.disconnect();
+    } catch {}
+    try {
+      deck.stems.mix.disconnect();
+    } catch {}
+    try {
+      deck.captureTap.disconnect();
     } catch {}
     deck.effects.forEach((stage) => {
       try {
@@ -692,14 +1004,34 @@ export class HarmoniqAudioBridge {
         stage.output.disconnect();
       } catch {}
     });
-    let previous: AudioNode = deck.input;
+    deck.input.connect(deck.eq.lows);
+    deck.eq.lows.connect(deck.eq.mids);
+    deck.eq.mids.connect(deck.eq.highs);
+    deck.eq.highs.connect(deck.stems.low.filter);
+    deck.eq.highs.connect(deck.stems.mid.filter);
+    deck.eq.highs.connect(deck.stems.high.filter);
+    deck.stems.low.filter.connect(deck.stems.low.gain);
+    deck.stems.mid.filter.connect(deck.stems.mid.gain);
+    deck.stems.high.filter.connect(deck.stems.high.gain);
+    deck.stems.low.gain.connect(deck.stems.mix);
+    deck.stems.mid.gain.connect(deck.stems.mix);
+    deck.stems.high.gain.connect(deck.stems.mix);
+    let previous: AudioNode = deck.stems.mix;
     for (const effectId of FX_ORDER) {
       const stage = deck.effects.get(effectId);
       if (!stage) continue;
       previous.connect(stage.input);
       previous = stage.output;
     }
-    previous.connect(deck.meterTap);
+    previous.connect(deck.captureTap);
+    deck.captureTap.connect(deck.captureMonitor);
+    deck.captureTap.connect(deck.meterTap);
+    const capture = this.loopCaptures.get(deckId);
+    if (capture) {
+      try {
+        deck.captureTap.connect(capture.processor);
+      } catch {}
+    }
   }
 
   private ensurePlayback(deckId: DeckId): DeckPlaybackInternal {
@@ -1006,6 +1338,10 @@ export class HarmoniqAudioBridge {
 
   dispose() {
     this.teardownMetering();
+    this.loopCaptures.forEach((_, id) => {
+      this.cancelLoopCapture(id);
+    });
+    this.loopCaptures.clear();
     this.playback.forEach((playback, deckId) => {
       this.stopPlayback(deckId, playback);
     });
@@ -1019,7 +1355,43 @@ export class HarmoniqAudioBridge {
         deck.input.disconnect();
       } catch {}
       try {
+        deck.eq.lows.disconnect();
+      } catch {}
+      try {
+        deck.eq.mids.disconnect();
+      } catch {}
+      try {
+        deck.eq.highs.disconnect();
+      } catch {}
+      try {
+        deck.stems.low.filter.disconnect();
+      } catch {}
+      try {
+        deck.stems.mid.filter.disconnect();
+      } catch {}
+      try {
+        deck.stems.high.filter.disconnect();
+      } catch {}
+      try {
+        deck.stems.low.gain.disconnect();
+      } catch {}
+      try {
+        deck.stems.mid.gain.disconnect();
+      } catch {}
+      try {
+        deck.stems.high.gain.disconnect();
+      } catch {}
+      try {
+        deck.stems.mix.disconnect();
+      } catch {}
+      try {
         deck.level.disconnect();
+      } catch {}
+      try {
+        deck.captureTap.disconnect();
+      } catch {}
+      try {
+        deck.captureMonitor.disconnect();
       } catch {}
       try {
         deck.meterTap.disconnect();
@@ -1028,6 +1400,8 @@ export class HarmoniqAudioBridge {
     this.decks.clear();
     this.deckGains.clear();
     this.effectStates.clear();
+    this.eqStates.clear();
+    this.stemStates.clear();
     if (this.master) {
       try {
         this.master.disconnect();

@@ -8,10 +8,14 @@ import {
   type DragEvent,
 } from "react";
 import { theme } from "@daw/theme";
+import type { StemType } from "../types";
+import { analyzeAudioFile } from "../lib/audioAnalysis";
+import type { AudioAnalysisStem } from "../lib/audioAnalysis";
 
 export interface AnalyzedStem {
   id: string;
   label: string;
+  type: StemType;
 }
 
 export interface AnalyzedTrackSummary {
@@ -36,11 +40,10 @@ type PendingItem = {
   id: string;
 };
 
-const DEFAULT_STEMS: AnalyzedStem[] = [
-  { id: "drums", label: "Drums" },
-  { id: "bass", label: "Bass" },
-  { id: "melody", label: "Melody" },
-  { id: "vocals", label: "Vocals" },
+const FALLBACK_STEMS: ReadonlyArray<{ type: StemType; label: string }> = [
+  { type: "drums", label: "Drums" },
+  { type: "synths", label: "Synths" },
+  { type: "vocals", label: "Vocals" },
 ];
 
 function hashString(value: string) {
@@ -169,19 +172,37 @@ export function TrackUploadPanel({ onTracksAnalyzed }: TrackUploadPanelProps) {
         objectUrlsRef.current.set(item.id, objectUrl);
         const baseKey = `${item.file.name}-${item.file.size}-${item.file.lastModified}`;
         const hash = hashString(baseKey);
-        const bpm = 78 + (hash % 96);
-        const scale = MUSICAL_KEYS[hash % MUSICAL_KEYS.length];
+        let analysisError: string | null = null;
+        let bpm = 120;
+        let scale = MUSICAL_KEYS[hash % MUSICAL_KEYS.length];
+        let stems: AudioAnalysisStem[] = [];
+        let durationSeconds: number | null = null;
+        try {
+          const analysis = await analyzeAudioFile(item.file);
+          bpm = analysis.bpm;
+          scale = analysis.camelotKey;
+          stems = analysis.stems;
+          durationSeconds = analysis.durationSeconds;
+        } catch (error) {
+          analysisError = error instanceof Error ? error.message : String(error);
+          stems = FALLBACK_STEMS.map((stem) => ({ type: stem.type, label: stem.label }));
+        }
+        const resolvedStems: AnalyzedStem[] = stems.map((stem, index) => ({
+          id: `${stem.type}-${hash % 10_000}-${index}`,
+          label: stem.label,
+          type: stem.type,
+        }));
         tracks.push({
           id: item.id,
           name: item.file.name.replace(/\.[^/.]+$/, ""),
           bpm,
           scale,
-          stems: DEFAULT_STEMS.map((stem, index) => ({ ...stem, id: `${stem.id}-${hash % 100}-${index}` })),
+          stems: resolvedStems,
           origin,
           file: item.file,
           objectUrl,
-          durationSeconds: null,
-          analysisError: null,
+          durationSeconds,
+          analysisError,
         });
       }
       onTracksAnalyzed(tracks);
