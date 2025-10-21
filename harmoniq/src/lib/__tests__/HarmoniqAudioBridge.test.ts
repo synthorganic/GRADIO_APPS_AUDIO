@@ -1,4 +1,4 @@
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi, type Mock } from "vitest";
 import { HarmoniqAudioBridge } from "../HarmoniqAudioBridge";
 import type { DeckPlaybackDiagnostics } from "../../types";
 
@@ -34,6 +34,13 @@ class MockAnalyserNode extends MockAudioNode {
     }
     target.set(this.data);
   }
+}
+
+class MockBiquadFilterNode extends MockAudioNode {
+  type: string = "lowpass";
+  frequency = { value: 0 };
+  Q = { value: 1 };
+  gain = { value: 0 };
 }
 
 class MockAudioBuffer {
@@ -79,6 +86,10 @@ class MockAudioContext {
 
   createAnalyser() {
     return new MockAnalyserNode();
+  }
+
+  createBiquadFilter() {
+    return new MockBiquadFilterNode();
   }
 
   createBufferSource() {
