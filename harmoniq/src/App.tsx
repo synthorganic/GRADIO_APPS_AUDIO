@@ -11,13 +11,14 @@ import type {
   DeckPlaybackDiagnostics,
   DeckStem,
   LoopSlot,
-  StemStatus,
+  EqBandId,
   StemType,
+  StemStatus,
 } from "./types";
 import { STEM_TYPES } from "./types";
 import { HarmonicWheelSelector } from "./components/HarmonicWheelSelector";
 import { FxRackPanel, type FxModuleConfig } from "./components/FxRackPanel";
-import { createWaveform } from "./shared/waveforms";
+import { createWaveform, createWaveformFromAudioBuffer } from "./shared/waveforms";
 import { useLoopLibrary } from "./state/LoopLibraryStore";
 import { TrackSelectionModal } from "./components/TrackSelectionModal";
 import {
@@ -27,7 +28,7 @@ import {
 } from "./components/TrackUploadPanel";
 import { TrackLibraryList } from "./components/TrackLibraryList";
 import { HarmoniqAudioBridge } from "./lib/HarmoniqAudioBridge";
-import { audioEngine } from "@daw/lib/audioEngine";
+import { encodeAudioBufferToWav } from "./lib/audioEncoding";
 
 const CAMELOT_ORDER = [
   "1A",
@@ -339,7 +340,7 @@ const FX_RACK_PRESETS: Record<"left" | "right", FxModuleConfig[]> = {
 };
 
 export default function App() {
-  const { loops: storedLoops, registerLoopLoad } = useLoopLibrary();
+  const { loops: storedLoops, registerLoopLoad, addLoop } = useLoopLibrary();
 
   const [decks, setDecks] = useState<DeckPerformance[]>(INITIAL_DECKS);
   const [crossfade, setCrossfade] = useState<CrossfadeState>({ x: 0.45, y: 0.35 });
@@ -352,166 +353,7 @@ export default function App() {
   const masterBpm = useMemo(() => MASTER_BASE_BPM * masterTimestretch, [masterTimestretch]);
   const measureSeconds = useMemo(() => 240 / Math.max(masterBpm, 1), [masterBpm]);
   const loopTimers = useRef<Map<string, number>>(new Map());
-  const loopArmings = useRef<Map<string, LoopArmingState>>(new Map());
-  const transportState = useRef<{ position: number; hasTick: boolean }>({ position: 0, hasTick: false });
-
-  const clearLoopTimer = useCallback((key: string) => {
-    const existing = loopTimers.current.get(key);
-    if (existing !== undefined) {
-      window.clearTimeout(existing);
-      loopTimers.current.delete(key);
-    }
-  }, []);
-
-  const clearLoopTimersForSlot = useCallback((baseKey: string) => {
-    loopTimers.current.forEach((timer, key) => {
-      if (key.startsWith(baseKey)) {
-        window.clearTimeout(timer);
-        loopTimers.current.delete(key);
-      }
-    });
-  }, []);
-
-  const registerLoopTimer = useCallback((key: string, delay: number, callback: () => void) => {
-    const id = window.setTimeout(() => {
-      loopTimers.current.delete(key);
-      callback();
-    }, Math.max(delay, 0));
-    loopTimers.current.set(key, id);
-  }, []);
-
-  const updateLoopSlotStatus = useCallback(
-    (deckId: DeckId, slotId: string, status: LoopSlot["status"]) => {
-      setLoopSlots((prev) => {
-        const slots = prev[deckId];
-        if (!slots) {
-          return prev;
-        }
-        let changed = false;
-        const nextSlots = slots.map((slot) => {
-          if (slot.id !== slotId) {
-            return slot;
-          }
-          if (slot.status === status) {
-            return slot;
-          }
-          changed = true;
-          return { ...slot, status };
-        });
-        if (!changed) {
-          return prev;
-        }
-        return { ...prev, [deckId]: nextSlots };
-      });
-    },
-    [setLoopSlots],
-  );
-
-  const processLoopArmings = useCallback(
-    (position: number) => {
-      if (loopArmings.current.size === 0) {
-        return;
-      }
-      const epsilon = 1e-3;
-      loopArmings.current.forEach((entry, key) => {
-        if (entry.state === "waiting" && position + epsilon >= entry.startTime) {
-          entry.state = "recording";
-          clearLoopTimer(`${key}:record`);
-          updateLoopSlotStatus(entry.deckId, entry.slotId, "recording");
-        }
-        if (entry.state === "recording" && position + epsilon >= entry.stopTime) {
-          loopArmings.current.delete(key);
-          clearLoopTimersForSlot(key);
-          updateLoopSlotStatus(entry.deckId, entry.slotId, "playing");
-        }
-      });
-    },
-    [clearLoopTimer, clearLoopTimersForSlot, updateLoopSlotStatus],
-  );
-
-  const scheduleLoopArming = useCallback(
-    (deckId: DeckId, slotId: string, length: LoopSlot["length"]) => {
-      const baseKey = `${deckId}-${slotId}`;
-      const gridBase = length === "bar" ? measureSeconds : measureSeconds / 2;
-      const safeGrid = Math.max(gridBase, 0.01);
-      const epsilon = 1e-3;
-      const position = transportState.current.position;
-      let startTime = Math.ceil((position + epsilon) / safeGrid) * safeGrid;
-      if (startTime <= position + epsilon) {
-        startTime += safeGrid;
-      }
-      const stopTime = startTime + safeGrid;
-      loopArmings.current.set(baseKey, {
-        deckId,
-        slotId,
-        length,
-        startTime,
-        stopTime,
-        state: "waiting",
-      });
-      const startDelayMs = Math.max(Math.round((startTime - position) * 1000), 0);
-      const stopDelayMs = Math.max(Math.round((stopTime - position) * 1000), 0);
-      registerLoopTimer(`${baseKey}:record`, startDelayMs, () => {
-        const entry = loopArmings.current.get(baseKey);
-        if (!entry || entry.state !== "waiting") {
-          return;
-        }
-        entry.state = "recording";
-        updateLoopSlotStatus(deckId, slotId, "recording");
-      });
-      registerLoopTimer(`${baseKey}:play`, stopDelayMs, () => {
-        const entry = loopArmings.current.get(baseKey);
-        if (!entry) {
-          return;
-        }
-        loopArmings.current.delete(baseKey);
-        clearLoopTimersForSlot(baseKey);
-        updateLoopSlotStatus(deckId, slotId, "playing");
-      });
-      processLoopArmings(position);
-    },
-    [clearLoopTimersForSlot, measureSeconds, processLoopArmings, registerLoopTimer, updateLoopSlotStatus],
-  );
-
-  const resetLoopArmings = useCallback(
-    (resetSlots: boolean) => {
-      if (loopArmings.current.size === 0) {
-        return;
-      }
-      const pending = resetSlots ? Array.from(loopArmings.current.values()) : [];
-      loopArmings.current.forEach((_, key) => {
-        clearLoopTimersForSlot(key);
-      });
-      loopArmings.current.clear();
-      if (!resetSlots || pending.length === 0) {
-        return;
-      }
-      setLoopSlots((prev) => {
-        let changed = false;
-        const next: typeof prev = { ...prev };
-        pending.forEach(({ deckId, slotId }) => {
-          const slots = next[deckId];
-          if (!slots) {
-            return;
-          }
-          const updated: LoopSlot[] = slots.map((slot) => {
-            if (slot.id !== slotId) {
-              return slot;
-            }
-            if (slot.status === "idle") {
-              return slot;
-            }
-            changed = true;
-            return { ...slot, status: "idle" as LoopSlot["status"] };
-          });
-          next[deckId] = updated;
-        });
-        return changed ? next : prev;
-      });
-    },
-    [clearLoopTimersForSlot, setLoopSlots],
-  );
-
+  const captureObjectUrls = useRef<Map<DeckId, string>>(new Map());
   const audioBridge = useMemo(() => {
     if (typeof window === "undefined") {
       return null;
@@ -782,6 +624,17 @@ export default function App() {
 
   useEffect(() => {
     if (!audioBridge) return;
+    decks.forEach((deck) => {
+      (Object.keys(deck.eqCuts) as EqBandId[]).forEach((band) => {
+        audioBridge.setEqCut(deck.id, band, deck.eqCuts[band]);
+      });
+      const targetStem = deck.stemStatus === "stem" && deck.activeStem ? deck.activeStem : null;
+      audioBridge.setStemProfile(deck.id, targetStem);
+    });
+  }, [audioBridge, decks]);
+
+  useEffect(() => {
+    if (!audioBridge) return;
     return audioBridge.subscribeDiagnostics((snapshot: DeckPlaybackDiagnostics) => {
       setDecks((prev) =>
         prev.map((deck) =>
@@ -805,7 +658,8 @@ export default function App() {
     return () => {
       loopTimers.current.forEach((timer) => window.clearTimeout(timer));
       loopTimers.current.clear();
-      loopArmings.current.clear();
+      captureObjectUrls.current.forEach((url) => URL.revokeObjectURL(url));
+      captureObjectUrls.current.clear();
     };
   }, []);
 
@@ -871,17 +725,105 @@ export default function App() {
     const slot = loopSlots[deckId]?.find((item) => item.id === slotId);
     if (!slot) return;
     const baseKey = `${deckId}-${slotId}`;
+    const deck = decks.find((item) => item.id === deckId);
+    if (!deck) return;
     if (slot.status !== "idle") {
       clearLoopTimersForSlot(baseKey);
       loopArmings.current.delete(baseKey);
       updateLoopSlotStatus(deckId, slotId, "idle");
+      if (audioBridge) {
+        audioBridge.cancelLoopCapture(deckId);
+      }
       return;
     }
 
     clearLoopTimersForSlot(baseKey);
     loopArmings.current.delete(baseKey);
     updateLoopSlotStatus(deckId, slotId, "queued");
-    scheduleLoopArming(deckId, slotId, slot.length);
+    const beatsPerBar = 4;
+    const bpm = deck.bpm ?? masterTempo;
+    const secondsPerBeat = 60 / Math.max(1, bpm);
+    const captureLengthSeconds = secondsPerBeat * (slot.length === "bar" ? beatsPerBar : beatsPerBar / 2);
+    const preparation = Math.max(120, Math.round(secondsPerBeat * 1000));
+
+    registerLoopTimer(`${baseKey}:record`, preparation, () => {
+      updateLoopSlotStatus(deckId, slotId, "recording");
+      if (!audioBridge) {
+        registerLoopTimer(`${baseKey}:play`, Math.round(captureLengthSeconds * 1000), () => {
+          updateLoopSlotStatus(deckId, slotId, "playing");
+        });
+        return;
+      }
+      void (async () => {
+        try {
+          const { buffer, durationSeconds } = await audioBridge.startLoopCapture(
+            deckId,
+            captureLengthSeconds,
+          );
+          const waveform = createWaveformFromAudioBuffer(buffer);
+          const wavData = encodeAudioBufferToWav(buffer);
+          const blob = new Blob([wavData], { type: "audio/wav" });
+          const sourceId = `capture-${deckId}-${Date.now()}`;
+          const objectUrl = URL.createObjectURL(blob);
+          const previousUrl = captureObjectUrls.current.get(deckId);
+          if (previousUrl) {
+            URL.revokeObjectURL(previousUrl);
+          }
+          captureObjectUrls.current.set(deckId, objectUrl);
+          const name = deck.loopName ? `${deck.loopName} · ${slot.label}` : `${deckId} ${slot.label}`;
+          await audioBridge.loadDeckAudio(deckId, {
+            id: sourceId,
+            arrayBuffer: wavData,
+            objectUrl,
+            name,
+          });
+          setDecks((prev) =>
+            prev.map((item) =>
+              item.id === deckId
+                ? {
+                    ...item,
+                    loopName: name,
+                    waveform,
+                    durationSeconds,
+                    currentTimeSeconds: 0,
+                    playbackError: null,
+                    objectUrl,
+                    trackId: sourceId,
+                    file: undefined,
+                  }
+                : item,
+            ),
+          );
+          updateLoopSlotStatus(deckId, slotId, "playing");
+          addLoop({
+            name,
+            bpm: Math.round(deck.bpm ?? masterTempo),
+            key: deck.tonalKey ?? selectedKey,
+            waveform,
+            mood: deck.mood ?? "Captured Loop",
+            folder: "Custom Imports",
+            durationSeconds,
+          });
+        } catch (error) {
+          const message = error instanceof Error ? error.message : String(error);
+          if (message.includes("cancelled")) {
+            return;
+          }
+          updateLoopSlotStatus(deckId, slotId, "idle");
+          setDecks((prev) =>
+            prev.map((item) =>
+              item.id === deckId
+                ? {
+                    ...item,
+                    playbackError: `Loop capture failed: ${message}`,
+                    isPlaying: false,
+                  }
+                : item,
+            ),
+          );
+        }
+      })();
+    });
   };
 
   const handleToggleFx = (deckId: DeckId, effectId: DeckFxId) => {
@@ -947,17 +889,22 @@ export default function App() {
     setSelectorKey(null);
   };
 
-  const handleToggleEq = (deckId: DeckId, band: "highs" | "mids" | "lows") => {
+  const handleToggleEq = (deckId: DeckId, band: EqBandId) => {
+    const deck = decks.find((item) => item.id === deckId);
+    const nextEnabled = deck ? !deck.eqCuts[band] : true;
     setDecks((prev) =>
-      prev.map((deck) =>
-        deck.id === deckId
+      prev.map((item) =>
+        item.id === deckId
           ? {
-              ...deck,
-              eqCuts: { ...deck.eqCuts, [band]: !deck.eqCuts[band] },
+              ...item,
+              eqCuts: { ...item.eqCuts, [band]: nextEnabled },
             }
-          : deck,
+          : item,
       ),
     );
+    if (audioBridge) {
+      audioBridge.setEqCut(deckId, band, nextEnabled);
+    }
   };
 
   const handleTriggerStem = (deckId: DeckId, stem: StemType) => {
@@ -1003,6 +950,17 @@ export default function App() {
           const nextLevel = targetStem
             ? clamp(Math.max(item.level, 0.62), 0, 1)
             : clamp(Math.max(item.level, 0.45), 0, 1);
+          const updatedStems = item.stems
+            ? item.stems.map((entry) => {
+                if (targetStem && entry.type === targetStem) {
+                  return { ...entry, status: "active" as StemStatus };
+                }
+                if (targetStem) {
+                  return { ...entry, status: "muted" as StemStatus };
+                }
+                return { ...entry, status: "standby" as StemStatus };
+              })
+            : item.stems;
           return {
             ...item,
             activeStem: targetStem,

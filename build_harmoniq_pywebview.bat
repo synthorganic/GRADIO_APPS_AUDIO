@@ -15,6 +15,8 @@ set "VENV_DIR=%BUILD_ROOT%\venv"
 set "REQUIREMENTS_FILE=%FRONTEND_DIR%\pywebview_requirements.txt"
 set "ENTRY_SCRIPT=%REPO_ROOT%harmoniq_pywebview.py"
 set "COMPILER_ROOT=%BUILD_ROOT%\compiler"
+set "MUSIC_DIR=%REPO_ROOT%music"
+set "MUSIC_STAGED_NAME=music"
 set "LOG_PREFIX=[HARMONIQ EXE]"
 
 rem ---------------------------------------------------------------------------
@@ -60,6 +62,7 @@ if not exist "%REQUIREMENTS_FILE%" (
 rem Ensure build directories exist
 if not exist "%BUILD_ROOT%" mkdir "%BUILD_ROOT%"
 if not exist "%STAGING_DIR%" mkdir "%STAGING_DIR%"
+if not exist "%MUSIC_DIR%" mkdir "%MUSIC_DIR%"
 
 rem ---------------------------------------------------------------------------
 rem Install and build the Harmoniq frontend bundle
@@ -129,7 +132,9 @@ python -m exe_compiler "%ENTRY_SCRIPT%" ^
     --build-root "%COMPILER_ROOT%" ^
     --name Harmoniq ^
     --pyinstaller-arg=--add-data ^
-    --pyinstaller-arg="%ASSET_STAGING%;%STAGED_DIST_NAME%"
+    --pyinstaller-arg="%ASSET_STAGING%;%STAGED_DIST_NAME%" ^
+    --pyinstaller-arg=--add-data ^
+    --pyinstaller-arg="%MUSIC_DIR%;%MUSIC_STAGED_NAME%"
 call :check_result "PyInstaller build failed"
 
 call :log "Executable available under %COMPILER_ROOT%\dist"

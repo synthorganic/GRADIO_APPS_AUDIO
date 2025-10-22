@@ -28,7 +28,7 @@ export interface DeckPerformance {
   bpm?: number;
   tonalKey?: string;
   mood?: string;
-  eqCuts: Record<"highs" | "mids" | "lows", boolean>;
+  eqCuts: Record<EqBandId, boolean>;
   activeStem: StemType | null;
   queuedStem: StemType | null;
   stemStatus: "main" | "queued" | "stem";

@@ -79,25 +79,6 @@ function ensureCamelotKey(waveform: Float32Array, fallback: string): string {
   return detectCamelotKeyFromWaveform(waveform);
 }
 
-export interface AutomationEnvelopePoint {
-  beat: number;
-  value: number;
-  curve: "linear" | "ease-in" | "ease-out";
-}
-
-export interface AutomationEnvelope {
-  id: string;
-  name: string;
-  target: string;
-  deckId: DeckId | null;
-  color: string;
-  lengthBeats: number;
-  resolution: number;
-  points: AutomationEnvelopePoint[];
-  createdAt: number;
-  updatedAt: number;
-}
-
 export interface LoopLibraryItem {
   id: string;
   name: string;
@@ -108,7 +89,6 @@ export interface LoopLibraryItem {
   folder: string;
   createdAt: number;
   updatedAt: number;
-  automationIds: string[];
   usageCount: number;
   lastLoadedAt: number | null;
   lastDeckId: DeckId | null;
@@ -123,24 +103,11 @@ export type LoopLibraryDraft = {
   waveform: Float32Array;
   mood: string;
   folder?: string;
-  automationIds?: string[];
   durationSeconds?: number | null;
-};
-
-export type AutomationEnvelopeDraft = {
-  id?: string;
-  name: string;
-  target: string;
-  deckId?: DeckId | null;
-  color: string;
-  lengthBeats: number;
-  resolution: number;
-  points: AutomationEnvelopePoint[];
 };
 
 interface LoopLibraryState {
   loops: Record<string, LoopLibraryItem>;
-  automation: Record<string, AutomationEnvelope>;
   folders: string[];
 }
 
@@ -153,33 +120,21 @@ interface PersistedState {
   savedAt: number;
   folders: string[];
   loops: PersistedLoop[];
-  automation: AutomationEnvelope[];
 }
 
 type LoopLibraryAction =
   | { type: "add-loop"; loop: LoopLibraryItem }
   | { type: "update-loop"; id: string; patch: Partial<LoopLibraryItem> }
   | { type: "remove-loop"; id: string }
-  | { type: "add-automation"; envelope: AutomationEnvelope }
-  | { type: "update-automation"; id: string; patch: Partial<AutomationEnvelope> }
-  | { type: "remove-automation"; id: string }
-  | { type: "link-automation"; loopId: string; envelopeId: string }
-  | { type: "unlink-automation"; loopId: string; envelopeId: string }
   | { type: "register-load"; loopId: string; deckId: DeckId }
   | { type: "replace-state"; state: LoopLibraryState };
 
 interface LoopLibraryContextValue {
   loops: LoopLibraryItem[];
-  automationEnvelopes: AutomationEnvelope[];
   folders: string[];
   addLoop: (draft: LoopLibraryDraft) => string;
   updateLoop: (id: string, patch: Partial<LoopLibraryItem>) => void;
   removeLoop: (id: string) => void;
-  addAutomation: (draft: AutomationEnvelopeDraft) => string;
-  updateAutomation: (id: string, patch: Partial<AutomationEnvelope>) => void;
-  removeAutomation: (id: string) => void;
-  linkAutomation: (loopId: string, envelopeId: string) => void;
-  unlinkAutomation: (loopId: string, envelopeId: string) => void;
   registerLoopLoad: (loopId: string, deckId: DeckId) => void;
   importFromSerialized: (serialized: string) => void;
   importFromFile: (file: File) => Promise<void>;
@@ -214,7 +169,6 @@ function normalizeLoopDraft(draft: LoopLibraryDraft, timestamp = Date.now()): Lo
     folder: draft.folder ?? DEFAULT_FOLDERS[0],
     createdAt: timestamp,
     updatedAt: timestamp,
-    automationIds: Array.from(new Set(draft.automationIds ?? [])),
     usageCount: 0,
     lastLoadedAt: null,
     lastDeckId: null,
@@ -222,77 +176,8 @@ function normalizeLoopDraft(draft: LoopLibraryDraft, timestamp = Date.now()): Lo
   };
 }
 
-function normalizeEnvelopeDraft(
-  draft: AutomationEnvelopeDraft,
-  timestamp = Date.now(),
-): AutomationEnvelope {
-  return {
-    id: draft.id ?? createId("env"),
-    name: draft.name,
-    target: draft.target,
-    deckId: draft.deckId ?? null,
-    color: draft.color,
-    lengthBeats: draft.lengthBeats,
-    resolution: draft.resolution,
-    points: draft.points,
-    createdAt: timestamp,
-    updatedAt: timestamp,
-  };
-}
-
 function createDefaultState(): LoopLibraryState {
   const now = Date.now();
-  const envOne = normalizeEnvelopeDraft(
-    {
-      name: "Neon Filter Sweep",
-      target: "Deck A Filter",
-      deckId: "A",
-      color: "rgba(132, 94, 255, 0.85)",
-      lengthBeats: 8,
-      resolution: 16,
-      points: [
-        { beat: 0, value: 0.12, curve: "linear" },
-        { beat: 2, value: 0.58, curve: "ease-in" },
-        { beat: 4, value: 0.35, curve: "ease-out" },
-        { beat: 8, value: 0.62, curve: "linear" },
-      ],
-    },
-    now - 1000 * 60 * 42,
-  );
-  const envTwo = normalizeEnvelopeDraft(
-    {
-      name: "Vapor Delay Mix",
-      target: "Deck C Delay",
-      deckId: "C",
-      color: "rgba(120, 203, 220, 0.8)",
-      lengthBeats: 16,
-      resolution: 32,
-      points: [
-        { beat: 0, value: 0.18, curve: "ease-in" },
-        { beat: 6, value: 0.72, curve: "linear" },
-        { beat: 12, value: 0.44, curve: "ease-out" },
-        { beat: 16, value: 0.56, curve: "linear" },
-      ],
-    },
-    now - 1000 * 60 * 84,
-  );
-  const envThree = normalizeEnvelopeDraft(
-    {
-      name: "Bass Glide",
-      target: "Master Pitch",
-      deckId: null,
-      color: "rgba(255, 148, 241, 0.78)",
-      lengthBeats: 4,
-      resolution: 8,
-      points: [
-        { beat: 0, value: 0.22, curve: "linear" },
-        { beat: 1.5, value: 0.68, curve: "ease-out" },
-        { beat: 4, value: 0.3, curve: "linear" },
-      ],
-    },
-    now - 1000 * 60 * 12,
-  );
-
   const loops = [
     normalizeLoopDraft(
       {
@@ -302,7 +187,6 @@ function createDefaultState(): LoopLibraryState {
         waveform: createWaveform(0.82),
         mood: "Glasswave",
         folder: DEFAULT_FOLDERS[1],
-        automationIds: [envOne.id],
         durationSeconds: 252,
       },
       now - 1000 * 60 * 90,
@@ -315,7 +199,6 @@ function createDefaultState(): LoopLibraryState {
         waveform: createWaveform(1.18),
         mood: "Retrograde",
         folder: DEFAULT_FOLDERS[2],
-        automationIds: [envTwo.id],
         durationSeconds: 236,
       },
       now - 1000 * 60 * 64,
@@ -328,7 +211,6 @@ function createDefaultState(): LoopLibraryState {
         waveform: createWaveform(0.44),
         mood: "Azure",
         folder: DEFAULT_FOLDERS[3],
-        automationIds: [envThree.id],
         durationSeconds: 214,
       },
       now - 1000 * 60 * 38,
@@ -341,7 +223,6 @@ function createDefaultState(): LoopLibraryState {
         waveform: createWaveform(1.62),
         mood: "Hypnotic",
         folder: DEFAULT_FOLDERS[1],
-        automationIds: [envOne.id, envTwo.id],
         durationSeconds: 206,
       },
       now - 1000 * 60 * 18,
@@ -363,14 +244,9 @@ function createDefaultState(): LoopLibraryState {
     }),
   );
 
-  const automationRecord = Object.fromEntries(
-    [envOne, envTwo, envThree].map((envelope) => [envelope.id, envelope]),
-  );
-
   return {
     loops: loopsRecord,
-    automation: automationRecord,
-    folders: [...DEFAULT_FOLDERS],
+    folders: ensureFolders(),
   };
 }
 
@@ -383,7 +259,6 @@ function serializeState(state: LoopLibraryState): PersistedState {
       ...loop,
       waveform: serializeWaveform(loop.waveform),
     })),
-    automation: Object.values(state.automation).map((envelope) => ({ ...envelope })),
   };
 }
 
@@ -398,16 +273,10 @@ function hydrateState(raw: PersistedState | null): LoopLibraryState {
       ...loop,
       key: ensureCamelotKey(waveform, loop.key),
       waveform,
-      automationIds: Array.from(new Set(loop.automationIds)),
     };
-  });
-  const automation: Record<string, AutomationEnvelope> = {};
-  raw.automation.forEach((envelope) => {
-    automation[envelope.id] = { ...envelope };
   });
   return {
     loops,
-    automation,
     folders: ensureFolders(raw.folders),
   };
 }
@@ -475,84 +344,6 @@ function reducer(state: LoopLibraryState, action: LoopLibraryAction): LoopLibrar
       return {
         ...state,
         loops: rest,
-      };
-    }
-    case "add-automation": {
-      return {
-        ...state,
-        automation: {
-          ...state.automation,
-          [action.envelope.id]: action.envelope,
-        },
-      };
-    }
-    case "update-automation": {
-      const existing = state.automation[action.id];
-      if (!existing) return state;
-      const next: AutomationEnvelope = {
-        ...existing,
-        ...action.patch,
-        updatedAt: Date.now(),
-      };
-      return {
-        ...state,
-        automation: {
-          ...state.automation,
-          [action.id]: next,
-        },
-      };
-    }
-    case "remove-automation": {
-      if (!state.automation[action.id]) return state;
-      const { [action.id]: _removed, ...rest } = state.automation;
-      const loops = Object.fromEntries(
-        Object.entries(state.loops).map(([id, loop]) => [
-          id,
-          {
-            ...loop,
-            automationIds: loop.automationIds.filter((entry) => entry !== action.id),
-          },
-        ]),
-      );
-      return {
-        ...state,
-        automation: rest,
-        loops,
-      };
-    }
-    case "link-automation": {
-      const loop = state.loops[action.loopId];
-      const automation = state.automation[action.envelopeId];
-      if (!loop || !automation) return state;
-      if (loop.automationIds.includes(action.envelopeId)) return state;
-      const next: LoopLibraryItem = {
-        ...loop,
-        automationIds: [...loop.automationIds, action.envelopeId],
-        updatedAt: Date.now(),
-      };
-      return {
-        ...state,
-        loops: {
-          ...state.loops,
-          [loop.id]: next,
-        },
-      };
-    }
-    case "unlink-automation": {
-      const loop = state.loops[action.loopId];
-      if (!loop) return state;
-      if (!loop.automationIds.includes(action.envelopeId)) return state;
-      const next: LoopLibraryItem = {
-        ...loop,
-        automationIds: loop.automationIds.filter((id) => id !== action.envelopeId),
-        updatedAt: Date.now(),
-      };
-      return {
-        ...state,
-        loops: {
-          ...state.loops,
-          [loop.id]: next,
-        },
       };
     }
     case "register-load": {
@@ -658,10 +449,6 @@ export function LoopLibraryProvider({ children }: { children: ReactNode }) {
     return Object.values(state.loops).sort((a, b) => b.updatedAt - a.updatedAt);
   }, [state.loops]);
 
-  const automationEnvelopes = useMemo(() => {
-    return Object.values(state.automation).sort((a, b) => a.name.localeCompare(b.name));
-  }, [state.automation]);
-
   const addLoop = useCallback(
     (draft: LoopLibraryDraft) => {
       const loop = normalizeLoopDraft(draft);
@@ -685,42 +472,6 @@ export function LoopLibraryProvider({ children }: { children: ReactNode }) {
     [dispatch],
   );
 
-  const addAutomation = useCallback(
-    (draft: AutomationEnvelopeDraft) => {
-      const envelope = normalizeEnvelopeDraft(draft);
-      dispatch({ type: "add-automation", envelope });
-      return envelope.id;
-    },
-    [dispatch],
-  );
-
-  const updateAutomation = useCallback(
-    (id: string, patch: Partial<AutomationEnvelope>) => {
-      dispatch({ type: "update-automation", id, patch });
-    },
-    [dispatch],
-  );
-
-  const removeAutomation = useCallback(
-    (id: string) => {
-      dispatch({ type: "remove-automation", id });
-    },
-    [dispatch],
-  );
-
-  const linkAutomation = useCallback(
-    (loopId: string, envelopeId: string) => {
-      dispatch({ type: "link-automation", loopId, envelopeId });
-    },
-    [dispatch],
-  );
-
-  const unlinkAutomation = useCallback(
-    (loopId: string, envelopeId: string) => {
-      dispatch({ type: "unlink-automation", loopId, envelopeId });
-    },
-    [dispatch],
-  );
 
   const registerLoopLoad = useCallback(
     (loopId: string, deckId: DeckId) => {
@@ -762,16 +513,10 @@ export function LoopLibraryProvider({ children }: { children: ReactNode }) {
   const value = useMemo<LoopLibraryContextValue>(
     () => ({
       loops,
-      automationEnvelopes,
       folders: state.folders,
       addLoop,
       updateLoop,
       removeLoop,
-      addAutomation,
-      updateAutomation,
-      removeAutomation,
-      linkAutomation,
-      unlinkAutomation,
       registerLoopLoad,
       importFromSerialized,
       importFromFile,
@@ -781,16 +526,10 @@ export function LoopLibraryProvider({ children }: { children: ReactNode }) {
     }),
     [
       loops,
-      automationEnvelopes,
       state.folders,
       addLoop,
       updateLoop,
       removeLoop,
-      addAutomation,
-      updateAutomation,
-      removeAutomation,
-      linkAutomation,
-      unlinkAutomation,
       registerLoopLoad,
       importFromSerialized,
       importFromFile,
