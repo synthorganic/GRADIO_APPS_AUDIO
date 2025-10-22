@@ -45,3 +45,9 @@ declare module "@daw/shared/WaveformPreview" {
   }
   export const WaveformPreview: FC<WaveformPreviewProps>;
 }
+
+declare module "@daw/lib/audioEngine" {
+  export const audioEngine: {
+    setTempo(bpm: number): void;
+  };
+}
