@@ -828,6 +828,8 @@ export function DeckMatrix({
         gap: "18px",
         padding: "22px 24px",
         position: "relative",
+        height: "100%",
+        minHeight: 0,
       }}
     >
       <header style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
@@ -898,7 +900,7 @@ export function DeckMatrix({
           const hoverSeconds = hasDuration && hoverRatio !== null ? ratioToSeconds(hoverRatio, durationSeconds) : null;
           const hoverLabel = hoverSeconds !== null ? formatTime(hoverSeconds) : null;
           const showHover = hoverLabel !== null && hoverRatio !== null;
-          const loops = loopSlots[deck.id] ?? [];
+          const loops = (loopSlots[deck.id] ?? []).slice(0, 3);
           return (
             <Fragment key={deck.id}>
               <div

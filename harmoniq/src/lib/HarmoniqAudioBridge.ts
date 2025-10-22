@@ -4,6 +4,7 @@ import type {
   DeckFxParams,
   DeckId,
   DeckPlaybackDiagnostics,
+  EqBandId,
   StemType,
 } from "../types";
 import { STEM_TYPES } from "../types";
@@ -22,11 +23,28 @@ interface StemBand {
   gain: GainNode;
 }
 
+interface DeckEqStage {
+  lows: BiquadFilterNode;
+  mids: BiquadFilterNode;
+  highs: BiquadFilterNode;
+}
+
+interface StemChain {
+  low: StemBand;
+  mid: StemBand;
+  high: StemBand;
+  mix: GainNode;
+}
+
 interface DeckNodes {
   input: GainNode;
   stemMix: GainNode;
   stemStages: Map<StemType, StemStage>;
+  stems: StemChain;
+  eq: DeckEqStage;
   level: GainNode;
+  captureTap: GainNode;
+  captureMonitor: GainNode;
   effects: Map<DeckFxId, EffectStage>;
   meterTap: GainNode;
   analyser: AnalyserNode;
@@ -632,6 +650,10 @@ export class HarmoniqAudioBridge {
 
   private effectStates = new Map<DeckId, Map<DeckFxId, boolean>>();
 
+  private eqStates = new Map<DeckId, Record<EqBandId, boolean>>();
+
+  private stemStates = new Map<DeckId, StemType | null>();
+
   private stemFocus = new Map<DeckId, StemType | null>();
 
   private masterTrim = 0.9;
@@ -734,6 +756,25 @@ export class HarmoniqAudioBridge {
       input.connect(stage.input);
       stage.output.connect(stemMix);
     });
+    const stems: StemChain = {
+      low: { filter: context.createBiquadFilter(), gain: context.createGain() },
+      mid: { filter: context.createBiquadFilter(), gain: context.createGain() },
+      high: { filter: context.createBiquadFilter(), gain: context.createGain() },
+      mix: context.createGain(),
+    };
+    stems.low.filter.type = "lowpass";
+    stems.low.filter.frequency.value = 320;
+    stems.low.filter.Q.value = 0.9;
+    stems.low.gain.gain.value = 1;
+    stems.mid.filter.type = "bandpass";
+    stems.mid.filter.frequency.value = 1200;
+    stems.mid.filter.Q.value = 1;
+    stems.mid.gain.gain.value = 1;
+    stems.high.filter.type = "highpass";
+    stems.high.filter.frequency.value = 3200;
+    stems.high.filter.Q.value = 0.7;
+    stems.high.gain.gain.value = 1;
+    stems.mix.gain.value = 1;
     const level = context.createGain();
     level.gain.value = 0;
     const master = this.ensureMaster(context);
@@ -749,8 +790,36 @@ export class HarmoniqAudioBridge {
     meterTap.connect(analyser);
     level.connect(master);
     captureMonitor.connect(master);
+    const eq: DeckEqStage = {
+      lows: context.createBiquadFilter(),
+      mids: context.createBiquadFilter(),
+      highs: context.createBiquadFilter(),
+    };
+    eq.lows.type = "highpass";
+    eq.lows.frequency.value = 24;
+    eq.lows.Q.value = 0.707;
+    eq.mids.type = "peaking";
+    eq.mids.frequency.value = 1200;
+    eq.mids.Q.value = 0.9;
+    eq.mids.gain.value = 0;
+    eq.highs.type = "lowpass";
+    eq.highs.frequency.value = 18000;
+    eq.highs.Q.value = 0.6;
     const meterData = new Float32Array(analyser.fftSize) as MeterArray;
-    deck = { input, stemMix, stemStages, level, effects: new Map(), meterTap, analyser, meterData };
+    deck = {
+      input,
+      stemMix,
+      stemStages,
+      stems,
+      eq,
+      level,
+      captureTap,
+      captureMonitor,
+      effects: new Map(),
+      meterTap,
+      analyser,
+      meterData,
+    };
     this.decks.set(deckId, deck);
     this.effectStates.set(deckId, new Map());
     this.eqStates.set(deckId, { highs: false, mids: false, lows: false });
@@ -1081,7 +1150,21 @@ export class HarmoniqAudioBridge {
         stage.output.disconnect();
       } catch {}
     });
-    let previous: AudioNode = deck.stemMix;
+    deck.stemMix.connect(deck.stems.low.filter);
+    deck.stemMix.connect(deck.stems.mid.filter);
+    deck.stemMix.connect(deck.stems.high.filter);
+    deck.stems.low.filter.connect(deck.stems.low.gain);
+    deck.stems.mid.filter.connect(deck.stems.mid.gain);
+    deck.stems.high.filter.connect(deck.stems.high.gain);
+    deck.stems.low.gain.connect(deck.stems.mix);
+    deck.stems.mid.gain.connect(deck.stems.mix);
+    deck.stems.high.gain.connect(deck.stems.mix);
+    deck.stems.mix.connect(deck.eq.lows);
+    deck.eq.lows.connect(deck.eq.mids);
+    deck.eq.mids.connect(deck.eq.highs);
+    deck.eq.highs.connect(deck.captureTap);
+
+    let previous: AudioNode = deck.captureTap;
     for (const effectId of FX_ORDER) {
       const stage = deck.effects.get(effectId);
       if (!stage) continue;
