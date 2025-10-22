@@ -87,3 +87,9 @@ The script installs npm dependencies, compiles the Vite bundle, provisions a
 local Python virtual environment, and invokes the `exe_compiler` helper to run
 PyInstaller. The final executable is placed in
 `build\\harmoniq_pywebview\\compiler\\dist\\Harmoniq.exe`.
+
+All external audio assets that should ship with the desktop build must live in
+the repository root under `music/`. The build helper copies this directory into
+the executable, and `harmoniq_pywebview.py` exposes its resolved location via
+the `HARMONIQ_MUSIC_DIR` environment variable so bridge code can write captured
+loops or read bundled stems alongside the executable.
