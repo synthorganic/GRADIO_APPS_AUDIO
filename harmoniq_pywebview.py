@@ -1,10 +1,14 @@
 """Launch the Harmoniq interface inside a PyWebview window.
 
 This script loads the pre-built Harmoniq frontend bundle directly from the
-filesystem so it can be packaged into a standalone desktop executable.
+filesystem so it can be packaged into a standalone desktop executable. The
+runtime also ensures a ``music`` workspace exists alongside the executable so
+captured loops or bundled stems can be stored in a predictable location.
 """
+
 from __future__ import annotations
 
+import os
 import sys
 from pathlib import Path
 
@@ -17,6 +21,7 @@ except ModuleNotFoundError as exc:  # pragma: no cover - import guard
 
 ROOT = Path(__file__).resolve().parent
 STAGED_DIST_NAME = "harmoniq_dist"
+MUSIC_DIR_NAME = "music"
 
 
 def _candidate_paths() -> list[Path]:
@@ -37,6 +42,46 @@ def _candidate_paths() -> list[Path]:
     return candidates
 
 
+def _candidate_music_paths() -> list[Path]:
+    """Return possible locations for the packaged music workspace."""
+
+    candidates: list[Path] = []
+    base = getattr(sys, "_MEIPASS", None)
+    if base is not None:
+        exe_dir = Path(sys.executable).resolve().parent
+        candidates.append(exe_dir / MUSIC_DIR_NAME)
+        candidates.append(Path(base) / MUSIC_DIR_NAME)
+
+    candidates.extend(
+        [
+            ROOT / MUSIC_DIR_NAME,
+            Path.cwd() / MUSIC_DIR_NAME,
+        ]
+    )
+
+    unique: list[Path] = []
+    seen: set[Path] = set()
+    for candidate in candidates:
+        if candidate in seen:
+            continue
+        unique.append(candidate)
+        seen.add(candidate)
+    return unique
+
+
+def ensure_music_directory() -> Path:
+    """Ensure the runtime music directory exists and return its path."""
+
+    candidates = _candidate_music_paths()
+    for candidate in candidates:
+        if candidate.exists() and candidate.is_dir():
+            return candidate
+
+    target = candidates[0]
+    target.mkdir(parents=True, exist_ok=True)
+    return target
+
+
 def locate_dist_directory() -> Path:
     """Return the path to the Harmoniq production bundle."""
     for candidate in _candidate_paths():
@@ -50,6 +95,10 @@ def locate_dist_directory() -> Path:
 
 def main() -> None:
     """Create and run the Harmoniq PyWebview window."""
+
+    music_dir = ensure_music_directory()
+    os.environ.setdefault("HARMONIQ_MUSIC_DIR", str(music_dir))
+
     dist_dir = locate_dist_directory()
     index_file = dist_dir / "index.html"
     if not index_file.exists():

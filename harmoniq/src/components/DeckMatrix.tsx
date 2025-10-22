@@ -12,6 +12,7 @@ import type {
   LoopSlotStatus,
   StemStatus,
   StemType,
+  EqBandId,
 } from "../types";
 
 export interface DeckMatrixProps {
@@ -28,7 +29,7 @@ export interface DeckMatrixProps {
   masterTrim: number;
   onMasterTimestretchChange: (value: number) => void;
   onMasterTrimChange: (value: number) => void;
-  onToggleEq: (deckId: DeckId, band: "highs" | "mids" | "lows") => void;
+  onToggleEq: (deckId: DeckId, band: EqBandId) => void;
   onTriggerStem: (deckId: DeckId, stem: StemType) => void;
   onToggleFx: (deckId: DeckId, effectId: DeckFxId) => void;
   onTogglePlayback: (deckId: DeckId) => void;
@@ -312,7 +313,7 @@ function LoopRecorderStrip({
 }
 
 const EQ_BANDS: ReadonlyArray<{
-  id: "highs" | "mids" | "lows";
+  id: EqBandId;
   label: string;
   tooltip: string;
 }> = [
