@@ -4,9 +4,9 @@ import type {
   DeckFxParams,
   DeckId,
   DeckPlaybackDiagnostics,
-  EqBandId,
   StemType,
 } from "../types";
+import { STEM_TYPES } from "../types";
 
 const FX_ORDER: DeckFxId[] = ["rhythmicGate", "stutter", "glitch", "crush", "phaser", "reverb"];
 
@@ -24,15 +24,8 @@ interface StemBand {
 
 interface DeckNodes {
   input: GainNode;
-  eq: Record<EqBandId, BiquadFilterNode>;
-  stems: {
-    low: StemBand;
-    mid: StemBand;
-    high: StemBand;
-    mix: GainNode;
-  };
-  captureTap: GainNode;
-  captureMonitor: GainNode;
+  stemMix: GainNode;
+  stemStages: Map<StemType, StemStage>;
   level: GainNode;
   effects: Map<DeckFxId, EffectStage>;
   meterTap: GainNode;
@@ -41,6 +34,13 @@ interface DeckNodes {
 }
 
 type MeterArray = Float32Array<ArrayBuffer>;
+
+interface StemStage {
+  input: GainNode;
+  gate: GainNode;
+  output: GainNode;
+  dispose(): void;
+}
 
 function clamp(value: number, min: number, max: number) {
   return Math.max(min, Math.min(max, value));
@@ -102,6 +102,88 @@ function divisionToSeconds(value: number | string | undefined) {
     }
   }
   return 0.25;
+}
+
+function createStemStage(context: AudioContext, stem: StemType): StemStage {
+  const input = context.createGain();
+  const gate = context.createGain();
+  gate.gain.value = 1;
+  input.connect(gate);
+  let tail: AudioNode = gate;
+  const filters: BiquadFilterNode[] = [];
+
+  const appendFilter = (configure: (filter: BiquadFilterNode) => void) => {
+    const filter = context.createBiquadFilter();
+    configure(filter);
+    tail.connect(filter);
+    tail = filter;
+    filters.push(filter);
+  };
+
+  switch (stem) {
+    case "vocals":
+      appendFilter((filter) => {
+        filter.type = "highpass";
+        filter.frequency.value = 180;
+        filter.Q.value = 0.9;
+      });
+      appendFilter((filter) => {
+        filter.type = "bandpass";
+        filter.frequency.value = 2200;
+        filter.Q.value = 1.15;
+      });
+      break;
+    case "drums":
+      appendFilter((filter) => {
+        filter.type = "highpass";
+        filter.frequency.value = 120;
+        filter.Q.value = 0.8;
+      });
+      appendFilter((filter) => {
+        filter.type = "peaking";
+        filter.frequency.value = 2800;
+        filter.Q.value = 0.7;
+        filter.gain.value = 5.5;
+      });
+      break;
+    case "synths":
+    default:
+      appendFilter((filter) => {
+        filter.type = "lowpass";
+        filter.frequency.value = 4200;
+        filter.Q.value = 0.75;
+      });
+      appendFilter((filter) => {
+        filter.type = "peaking";
+        filter.frequency.value = 900;
+        filter.Q.value = 0.9;
+        filter.gain.value = 3.5;
+      });
+      break;
+  }
+
+  const output = context.createGain();
+  output.gain.value = 0.92;
+  tail.connect(output);
+
+  const dispose = () => {
+    try {
+      input.disconnect();
+    } catch {}
+    try {
+      gate.disconnect();
+    } catch {}
+    filters.forEach((filter) => {
+      try {
+        filter.disconnect();
+      } catch {}
+    });
+    try {
+      output.disconnect();
+    } catch {}
+  };
+
+  return { input, gate, output, dispose };
 }
 
 function createReverbStage(context: AudioContext): EffectStage {
@@ -550,11 +632,11 @@ export class HarmoniqAudioBridge {
 
   private effectStates = new Map<DeckId, Map<DeckFxId, boolean>>();
 
-  private eqStates = new Map<DeckId, Record<EqBandId, boolean>>();
-
-  private stemStates = new Map<DeckId, StemType | null>();
+  private stemFocus = new Map<DeckId, StemType | null>();
 
   private masterTrim = 0.9;
+
+  private timestretch = 1;
 
   private smoothing = 0.08;
 
@@ -643,39 +725,15 @@ export class HarmoniqAudioBridge {
       return deck;
     }
     const input = context.createGain();
-    const eqLows = context.createBiquadFilter();
-    eqLows.type = "highpass";
-    eqLows.frequency.value = 24;
-    eqLows.Q.value = 0.707;
-    const eqMids = context.createBiquadFilter();
-    eqMids.type = "peaking";
-    eqMids.frequency.value = 1200;
-    eqMids.Q.value = 0.9;
-    eqMids.gain.value = 0;
-    const eqHighs = context.createBiquadFilter();
-    eqHighs.type = "lowpass";
-    eqHighs.frequency.value = 18000;
-    eqHighs.Q.value = 0.6;
-    const stemLowFilter = context.createBiquadFilter();
-    stemLowFilter.type = "lowpass";
-    stemLowFilter.frequency.value = 220;
-    stemLowFilter.Q.value = 0.9;
-    const stemLowGain = context.createGain();
-    stemLowGain.gain.value = 1;
-    const stemMidFilter = context.createBiquadFilter();
-    stemMidFilter.type = "bandpass";
-    stemMidFilter.frequency.value = 1200;
-    stemMidFilter.Q.value = 1.2;
-    const stemMidGain = context.createGain();
-    stemMidGain.gain.value = 1;
-    const stemHighFilter = context.createBiquadFilter();
-    stemHighFilter.type = "highpass";
-    stemHighFilter.frequency.value = 3200;
-    stemHighFilter.Q.value = 0.8;
-    const stemHighGain = context.createGain();
-    stemHighGain.gain.value = 1;
     const stemMix = context.createGain();
-    stemMix.gain.value = 1;
+    stemMix.gain.value = 0.78;
+    const stemStages = new Map<StemType, StemStage>();
+    STEM_TYPES.forEach((stem) => {
+      const stage = createStemStage(context, stem);
+      stemStages.set(stem, stage);
+      input.connect(stage.input);
+      stage.output.connect(stemMix);
+    });
     const level = context.createGain();
     level.gain.value = 0;
     const master = this.ensureMaster(context);
@@ -692,28 +750,13 @@ export class HarmoniqAudioBridge {
     level.connect(master);
     captureMonitor.connect(master);
     const meterData = new Float32Array(analyser.fftSize) as MeterArray;
-    deck = {
-      input,
-      eq: { lows: eqLows, mids: eqMids, highs: eqHighs },
-      stems: {
-        low: { filter: stemLowFilter, gain: stemLowGain },
-        mid: { filter: stemMidFilter, gain: stemMidGain },
-        high: { filter: stemHighFilter, gain: stemHighGain },
-        mix: stemMix,
-      },
-      captureTap,
-      captureMonitor,
-      level,
-      effects: new Map(),
-      meterTap,
-      analyser,
-      meterData,
-    };
+    deck = { input, stemMix, stemStages, level, effects: new Map(), meterTap, analyser, meterData };
     this.decks.set(deckId, deck);
     this.effectStates.set(deckId, new Map());
     this.eqStates.set(deckId, { highs: false, mids: false, lows: false });
     this.stemStates.set(deckId, null);
     this.rebuildDeckChain(deckId);
+    this.applyStemFocus(deckId, deck, context);
     return deck;
   }
 
@@ -737,6 +780,40 @@ export class HarmoniqAudioBridge {
     this.masterTrim = clamped;
     const master = this.ensureMaster(context);
     master.gain.setTargetAtTime(clamped, context.currentTime, 0.1);
+  }
+
+  setTimestretch(value: number) {
+    const clamped = clamp(value, 0.25, 4);
+    const previous = this.timestretch;
+    this.timestretch = clamped;
+    const context = this.getContext();
+    if (!context || previous === clamped) {
+      return;
+    }
+    this.playback.forEach((playback) => {
+      if (!playback.isPlaying || playback.startedAt === null) {
+        return;
+      }
+      const duration = playback.durationSeconds ?? playback.buffer?.duration ?? null;
+      const elapsed = Math.max(0, context.currentTime - playback.startedAt);
+      const advanced = playback.position + elapsed * previous;
+      playback.position = duration ? clamp(advanced, 0, duration) : advanced;
+      playback.startedAt = context.currentTime;
+    });
+    this.playback.forEach((playback) => {
+      const source = playback.source;
+      if (!source) {
+        return;
+      }
+      try {
+        if (source.playbackRate && typeof source.playbackRate.setTargetAtTime === "function") {
+          source.playbackRate.setTargetAtTime(clamped, context.currentTime, 0.05);
+        } else if (source.playbackRate) {
+          source.playbackRate.value = clamped;
+        }
+      } catch {}
+    });
+    this.updateAllDiagnostics();
   }
 
   setEffectState(deckId: DeckId, effectId: DeckFxId, enabled: boolean, params: DeckFxParams = {}) {
@@ -961,7 +1038,7 @@ export class HarmoniqAudioBridge {
     const deck = this.decks.get(deckId);
     if (!deck) return;
     try {
-      deck.input.disconnect();
+      deck.stemMix.disconnect();
     } catch {}
     try {
       deck.eq.lows.disconnect();
@@ -1004,34 +1081,39 @@ export class HarmoniqAudioBridge {
         stage.output.disconnect();
       } catch {}
     });
-    deck.input.connect(deck.eq.lows);
-    deck.eq.lows.connect(deck.eq.mids);
-    deck.eq.mids.connect(deck.eq.highs);
-    deck.eq.highs.connect(deck.stems.low.filter);
-    deck.eq.highs.connect(deck.stems.mid.filter);
-    deck.eq.highs.connect(deck.stems.high.filter);
-    deck.stems.low.filter.connect(deck.stems.low.gain);
-    deck.stems.mid.filter.connect(deck.stems.mid.gain);
-    deck.stems.high.filter.connect(deck.stems.high.gain);
-    deck.stems.low.gain.connect(deck.stems.mix);
-    deck.stems.mid.gain.connect(deck.stems.mix);
-    deck.stems.high.gain.connect(deck.stems.mix);
-    let previous: AudioNode = deck.stems.mix;
+    let previous: AudioNode = deck.stemMix;
     for (const effectId of FX_ORDER) {
       const stage = deck.effects.get(effectId);
       if (!stage) continue;
       previous.connect(stage.input);
       previous = stage.output;
     }
-    previous.connect(deck.captureTap);
-    deck.captureTap.connect(deck.captureMonitor);
-    deck.captureTap.connect(deck.meterTap);
-    const capture = this.loopCaptures.get(deckId);
-    if (capture) {
-      try {
-        deck.captureTap.connect(capture.processor);
-      } catch {}
+    previous.connect(deck.meterTap);
+    const context = this.getActiveContext();
+    if (context) {
+      this.applyStemFocus(deckId, deck, context);
     }
+  }
+
+  private applyStemFocus(deckId: DeckId, deck: DeckNodes, context: AudioContext) {
+    const focus = this.stemFocus.get(deckId) ?? null;
+    deck.stemStages.forEach((stage, type) => {
+      const target = focus ? (type === focus ? 1 : 0.18) : 1;
+      stage.gate.gain.setTargetAtTime(target, context.currentTime, this.smoothing);
+    });
+  }
+
+  setDeckStemFocus(deckId: DeckId, stem: StemType | null) {
+    const context = this.getContext();
+    if (!context) return;
+    const deck = this.ensureDeck(context, deckId);
+    const normalized = stem ?? null;
+    const previous = this.stemFocus.get(deckId) ?? null;
+    if (previous === normalized) {
+      return;
+    }
+    this.stemFocus.set(deckId, normalized);
+    this.applyStemFocus(deckId, deck, context);
   }
 
   private ensurePlayback(deckId: DeckId): DeckPlaybackInternal {
@@ -1062,7 +1144,8 @@ export class HarmoniqAudioBridge {
       return duration ? clamp(clampedPosition, 0, duration) : clampedPosition;
     }
     const elapsed = Math.max(0, context.currentTime - playback.startedAt);
-    const current = clampedPosition + elapsed;
+    const rate = Math.max(this.timestretch, 0.01);
+    const current = clampedPosition + elapsed * rate;
     return duration ? clamp(current, 0, duration) : current;
   }
 
@@ -1235,6 +1318,14 @@ export class HarmoniqAudioBridge {
       );
       const source = context.createBufferSource();
       source.buffer = playback.buffer;
+      if (source.playbackRate) {
+        source.playbackRate.value = this.timestretch;
+        try {
+          if (typeof source.playbackRate.setValueAtTime === "function") {
+            source.playbackRate.setValueAtTime(this.timestretch, context.currentTime);
+          }
+        } catch {}
+      }
       source.connect(deck.input);
       source.onended = () => {
         const current = this.playback.get(deckId);
@@ -1351,38 +1442,14 @@ export class HarmoniqAudioBridge {
       deck.effects.forEach((stage) => {
         stage.dispose();
       });
+      deck.stemStages.forEach((stage) => {
+        stage.dispose();
+      });
       try {
         deck.input.disconnect();
       } catch {}
       try {
-        deck.eq.lows.disconnect();
-      } catch {}
-      try {
-        deck.eq.mids.disconnect();
-      } catch {}
-      try {
-        deck.eq.highs.disconnect();
-      } catch {}
-      try {
-        deck.stems.low.filter.disconnect();
-      } catch {}
-      try {
-        deck.stems.mid.filter.disconnect();
-      } catch {}
-      try {
-        deck.stems.high.filter.disconnect();
-      } catch {}
-      try {
-        deck.stems.low.gain.disconnect();
-      } catch {}
-      try {
-        deck.stems.mid.gain.disconnect();
-      } catch {}
-      try {
-        deck.stems.high.gain.disconnect();
-      } catch {}
-      try {
-        deck.stems.mix.disconnect();
+        deck.stemMix.disconnect();
       } catch {}
       try {
         deck.level.disconnect();
@@ -1400,8 +1467,7 @@ export class HarmoniqAudioBridge {
     this.decks.clear();
     this.deckGains.clear();
     this.effectStates.clear();
-    this.eqStates.clear();
-    this.stemStates.clear();
+    this.stemFocus.clear();
     if (this.master) {
       try {
         this.master.disconnect();

@@ -15,15 +15,6 @@ export type DeckFxId = "reverb" | "rhythmicGate" | "stutter" | "glitch" | "crush
 
 export type DeckFxParams = Record<string, number | string>;
 
-export type EqBandId = "highs" | "mids" | "lows";
-
-export interface DeckStem {
-  id: string;
-  label: string;
-  type: StemType;
-  status: StemStatus;
-}
-
 export interface DeckPerformance {
   id: DeckId;
   loopName: string;
@@ -60,6 +51,16 @@ export interface CrossfadeState {
 }
 
 export type StemType = "vocals" | "drums" | "synths";
+
+export const STEM_TYPES: readonly StemType[] = ["vocals", "drums", "synths"];
+
+export interface DeckStem {
+  id: string;
+  label: string;
+  status: StemStatus;
+  type: StemType;
+  sourceStemId?: string | null;
+}
 
 export interface DeckPlaybackDiagnostics {
   deckId: DeckId;

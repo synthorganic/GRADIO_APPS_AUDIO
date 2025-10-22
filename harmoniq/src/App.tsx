@@ -9,17 +9,23 @@ import type {
   DeckId,
   DeckPerformance,
   DeckPlaybackDiagnostics,
+  DeckStem,
   LoopSlot,
   EqBandId,
   StemType,
   StemStatus,
 } from "./types";
+import { STEM_TYPES } from "./types";
 import { HarmonicWheelSelector } from "./components/HarmonicWheelSelector";
 import { FxRackPanel, type FxModuleConfig } from "./components/FxRackPanel";
 import { createWaveform, createWaveformFromAudioBuffer } from "./shared/waveforms";
 import { useLoopLibrary } from "./state/LoopLibraryStore";
 import { TrackSelectionModal } from "./components/TrackSelectionModal";
-import { TrackUploadPanel, type AnalyzedTrackSummary } from "./components/TrackUploadPanel";
+import {
+  TrackUploadPanel,
+  type AnalyzedStem,
+  type AnalyzedTrackSummary,
+} from "./components/TrackUploadPanel";
 import { TrackLibraryList } from "./components/TrackLibraryList";
 import { HarmoniqAudioBridge } from "./lib/HarmoniqAudioBridge";
 import { encodeAudioBufferToWav } from "./lib/audioEncoding";
@@ -79,6 +85,96 @@ function createFxState(overrides: Partial<Record<DeckFxId, boolean>> = {}) {
 
 function clamp(value: number, min: number, max: number) {
   return Math.max(min, Math.min(max, value));
+}
+
+const STEM_LABEL_DEFAULTS: Record<StemType, string> = {
+  vocals: "Vocals",
+  drums: "Drums",
+  synths: "Synths",
+};
+
+const STEM_KEYWORDS: Record<StemType, string[]> = {
+  vocals: ["vocal", "vox", "singer", "lyric", "lead vocal", "voice", "acapella"],
+  drums: ["drum", "percussion", "perc", "beat", "kick", "snare", "hi-hat", "rhythm"],
+  synths: ["synth", "melody", "lead", "keys", "pad", "bass", "chord", "instrument"],
+};
+
+function scoreStemCandidate(stem: AnalyzedStem, target: StemType) {
+  const haystack = `${stem.id} ${stem.label}`.toLowerCase();
+  const keywords = STEM_KEYWORDS[target];
+  return keywords.reduce((score, keyword, index) => {
+    if (!keyword) return score;
+    return haystack.includes(keyword) ? score + (keywords.length - index) : score;
+  }, 0);
+}
+
+function assignDeckStems(trackId: string, stems: AnalyzedStem[]): DeckStem[] {
+  const pool = stems.map((stem, index) => ({ stem, index }));
+  const used = new Set<number>();
+  const results: DeckStem[] = [];
+
+  const pickBest = (type: StemType): DeckStem | null => {
+    let bestIndex = -1;
+    let bestScore = 0;
+    pool.forEach(({ stem, index }) => {
+      if (used.has(index)) return;
+      const score = scoreStemCandidate(stem, type);
+      if (score > bestScore || (score > 0 && score === bestScore && bestIndex === -1)) {
+        bestScore = score;
+        bestIndex = index;
+      }
+    });
+    if (bestIndex === -1) {
+      return null;
+    }
+    used.add(bestIndex);
+    const match = pool[bestIndex].stem;
+    return {
+      id: `${trackId}-${type}`,
+      label: match.label,
+      status: "standby",
+      type,
+      sourceStemId: match.id,
+    };
+  };
+
+  const pullFallback = (): { stem: AnalyzedStem; index: number } | null => {
+    for (const entry of pool) {
+      if (!used.has(entry.index)) {
+        used.add(entry.index);
+        return entry;
+      }
+    }
+    return null;
+  };
+
+  STEM_TYPES.forEach((type) => {
+    const best = pickBest(type);
+    if (best) {
+      results.push(best);
+      return;
+    }
+    const fallback = pullFallback();
+    if (fallback) {
+      results.push({
+        id: `${trackId}-${type}`,
+        label: fallback.stem.label,
+        status: "standby",
+        type,
+        sourceStemId: fallback.stem.id,
+      });
+      return;
+    }
+    results.push({
+      id: `${trackId}-${type}`,
+      label: STEM_LABEL_DEFAULTS[type],
+      status: "standby",
+      type,
+      sourceStemId: null,
+    });
+  });
+
+  return results;
 }
 
 function computeCrossfadeWeights(crossfade: CrossfadeState): Record<DeckId, number> {
@@ -217,6 +313,8 @@ const INITIAL_LOOP_SLOTS: Record<DeckId, LoopSlot[]> = {
   D: createLoopSlots("D"),
 };
 
+const MASTER_BASE_BPM = 128;
+
 const FX_RACK_PRESETS: Record<"left" | "right", FxModuleConfig[]> = {
   left: [
     { id: "drive", label: "Drive", amount: 0.62, enabled: true, accent: "rgba(255, 148, 241, 0.85)" },
@@ -239,11 +337,11 @@ export default function App() {
   const [crossfade, setCrossfade] = useState<CrossfadeState>({ x: 0.45, y: 0.35 });
   const [selectedKey, setSelectedKey] = useState("8A");
   const [loopSlots, setLoopSlots] = useState<Record<DeckId, LoopSlot[]>>(INITIAL_LOOP_SLOTS);
-  const [masterTempo, setMasterTempo] = useState(128);
-  const [masterPitch, setMasterPitch] = useState(0);
+  const [masterTimestretch, setMasterTimestretch] = useState(1);
   const [masterTrim, setMasterTrim] = useState(0.9);
   const [selectorKey, setSelectorKey] = useState<string | null>(null);
   const [libraryTracks, setLibraryTracks] = useState<AnalyzedTrackSummary[]>([]);
+  const masterBpm = useMemo(() => MASTER_BASE_BPM * masterTimestretch, [masterTimestretch]);
   const loopTimers = useRef<Map<string, number>>(new Map());
   const captureObjectUrls = useRef<Map<DeckId, string>>(new Map());
   const audioBridge = useMemo(() => {
@@ -336,6 +434,7 @@ export default function App() {
       return;
     }
     const waveformSeed = computeSeedFromName(track.name);
+    const assignedStems = assignDeckStems(track.id, track.stems);
     setDecks((prev) =>
       prev.map((deck) =>
         deck.id === deckId
@@ -347,12 +446,7 @@ export default function App() {
               tonalKey: track.scale,
               scale: track.scale,
               source: track.origin,
-              stems: track.stems.map((stem) => ({
-                id: `${track.id}-${stem.id}`,
-                label: stem.label,
-                type: stem.type,
-                status: "standby",
-              })),
+              stems: assignedStems,
               durationSeconds: track.durationSeconds ?? deck.durationSeconds ?? null,
               currentTimeSeconds: 0,
               isPlaying: false,
@@ -370,6 +464,9 @@ export default function App() {
       [deckId]: prev[deckId]?.map((slot) => ({ ...slot, status: "idle" })) ?? createLoopSlots(deckId),
     }));
     handleFocusDeck(deckId);
+    if (audioBridge) {
+      audioBridge.setDeckStemFocus(deckId, null);
+    }
     if (audioBridge) {
       const source: DeckAudioSource = {
         id: track.id,
@@ -499,6 +596,11 @@ export default function App() {
     if (!audioBridge) return;
     audioBridge.setMasterTrim(masterTrim);
   }, [audioBridge, masterTrim]);
+
+  useEffect(() => {
+    if (!audioBridge) return;
+    audioBridge.setTimestretch(masterTimestretch);
+  }, [audioBridge, masterTimestretch]);
 
   useEffect(() => {
     if (!audioBridge) return;
@@ -767,8 +869,9 @@ export default function App() {
     const timerKey = `stem-${deckId}`;
     clearLoopTimersForSlot(timerKey);
 
-    const bpm = deck.bpm ?? masterTempo;
-    const measureMs = Math.max(Math.round((60_000 / Math.max(bpm, 1)) * 4), 400);
+    const baseBpm = deck.bpm ?? MASTER_BASE_BPM;
+    const stretchedBpm = Math.max(baseBpm * masterTimestretch, 1);
+    const measureMs = Math.max(Math.round((60_000 / stretchedBpm) * 4), 400);
 
     setDecks((prev) =>
       prev.map((item) =>
@@ -787,6 +890,17 @@ export default function App() {
       setDecks((prev) =>
         prev.map((item) => {
           if (item.id !== deckId) return item;
+          const updatedStems = item.stems
+            ? item.stems.map((stem) => {
+                if (!targetStem) {
+                  return { ...stem, status: "standby" };
+                }
+                if (stem.type === targetStem) {
+                  return { ...stem, status: "active" };
+                }
+                return { ...stem, status: "muted" };
+              })
+            : item.stems;
           const nextLevel = targetStem
             ? clamp(Math.max(item.level, 0.62), 0, 1)
             : clamp(Math.max(item.level, 0.45), 0, 1);
@@ -807,12 +921,12 @@ export default function App() {
             queuedStem: null,
             stemStatus: targetStem ? "stem" : "main",
             level: nextLevel,
-            stems: updatedStems ?? item.stems,
+            stems: updatedStems,
           };
         }),
       );
       if (audioBridge) {
-        audioBridge.setStemProfile(deckId, targetStem);
+        audioBridge.setDeckStemFocus(deckId, targetStem);
       }
     });
   };
@@ -856,11 +970,10 @@ export default function App() {
               onFocusDeck={handleFocusDeck}
               loopSlots={loopSlots}
               onToggleLoopSlot={handleToggleLoopSlot}
-              masterTempo={masterTempo}
-              masterPitch={masterPitch}
+              masterTimestretch={masterTimestretch}
+              masterBpm={masterBpm}
               masterTrim={masterTrim}
-              onMasterTempoChange={setMasterTempo}
-              onMasterPitchChange={setMasterPitch}
+              onMasterTimestretchChange={setMasterTimestretch}
               onMasterTrimChange={setMasterTrim}
               onToggleEq={handleToggleEq}
               onTriggerStem={handleTriggerStem}

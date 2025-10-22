@@ -1,4 +1,4 @@
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi, type Mock } from "vitest";
 import { HarmoniqAudioBridge } from "../HarmoniqAudioBridge";
 import type { DeckPlaybackDiagnostics } from "../../types";
 
@@ -36,6 +36,13 @@ class MockAnalyserNode extends MockAudioNode {
   }
 }
 
+class MockBiquadFilterNode extends MockAudioNode {
+  type: string = "lowpass";
+  frequency = { value: 0 };
+  Q = { value: 1 };
+  gain = { value: 0 };
+}
+
 class MockAudioBuffer {
   constructor(public duration: number, public sampleRate = 48000, public numberOfChannels = 2) {}
 
@@ -48,6 +55,11 @@ class MockAudioBufferSourceNode extends MockAudioNode {
   buffer: MockAudioBuffer | null = null;
   onended: (() => void) | null = null;
   startedOffsets: number[] = [];
+  playbackRate = {
+    value: 1,
+    setTargetAtTime: vi.fn(),
+    setValueAtTime: vi.fn(),
+  };
 
   start(_when: number, offset = 0) {
     this.startedOffsets.push(offset);
@@ -66,6 +78,7 @@ class MockAudioContext {
   destination = new MockAudioNode();
   decodeDuration = 0;
   closed = false;
+  createdSources: MockAudioBufferSourceNode[] = [];
 
   createGain() {
     return new MockGainNode();
@@ -75,8 +88,14 @@ class MockAudioContext {
     return new MockAnalyserNode();
   }
 
+  createBiquadFilter() {
+    return new MockBiquadFilterNode();
+  }
+
   createBufferSource() {
-    return new MockAudioBufferSourceNode();
+    const source = new MockAudioBufferSourceNode();
+    this.createdSources.push(source);
+    return source;
   }
 
   decodeAudioData(_data: ArrayBuffer) {
@@ -164,6 +183,40 @@ describe("HarmoniqAudioBridge", () => {
     expect(reloadSnapshot?.deckId).toBe("A");
     expect(reloadSnapshot?.durationSeconds ?? 0).toBeCloseTo(9.8, 3);
     expect(reloadSnapshot?.isPlaying).toBe(false);
+
+    unsubscribe();
+  });
+
+  it("updates playback rate when timestretch changes", async () => {
+    const buffer = new ArrayBuffer(32);
+    const snapshots: DeckPlaybackDiagnostics[] = [];
+    const unsubscribe = bridge.subscribeDiagnostics((snapshot) => snapshots.push(snapshot));
+
+    await bridge.loadDeckAudio("A", {
+      id: "deck-track",
+      arrayBuffer: buffer,
+      objectUrl: "blob:deck",
+      name: "Deck",
+    });
+
+    await bridge.playDeck("A");
+    const source = context.createdSources.at(-1);
+    expect(source?.playbackRate.value).toBeCloseTo(1);
+
+    snapshots.length = 0;
+    context.currentTime = 1;
+    vi.advanceTimersByTime(10);
+    const beforeChange = snapshots.at(-1)?.currentTimeSeconds ?? 0;
+
+    context.currentTime = 1.5;
+    bridge.setTimestretch(1.5);
+    expect(source?.playbackRate.setTargetAtTime).toHaveBeenCalledWith(1.5, 1.5, 0.05);
+
+    snapshots.length = 0;
+    context.currentTime = 2;
+    vi.advanceTimersByTime(10);
+    const afterChange = snapshots.at(-1)?.currentTimeSeconds ?? 0;
+    expect(afterChange).toBeGreaterThan(beforeChange + 0.7);
 
     unsubscribe();
   });
