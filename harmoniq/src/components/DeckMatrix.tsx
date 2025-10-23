@@ -1,5 +1,5 @@
 import { Fragment, useCallback, useMemo, useRef, useState } from "react";
-import type { PointerEvent } from "react";
+import type { KeyboardEvent, PointerEvent } from "react";
 import { theme } from "@daw/theme";
 import { cardSurfaceStyle, toolbarButtonStyle } from "@daw/components/layout/styles";
 import { WaveformPreview } from "./WaveformPreview";
@@ -32,7 +32,7 @@ export interface DeckMatrixProps {
   onToggleEq: (deckId: DeckId, band: EqBandId) => void;
   onTriggerStem: (deckId: DeckId, stem: StemType) => void;
   onToggleFx: (deckId: DeckId, effectId: DeckFxId) => void;
-  onTogglePlayback: (deckId: DeckId) => void;
+  onTogglePlayback: (deckId: DeckId, holdSeconds?: number | null) => void;
   onSeekRatio: (deckId: DeckId, ratio: number) => void;
   onRetryPlayback: (deckId: DeckId) => void;
 }
@@ -62,6 +62,13 @@ function clamp(value: number, min: number, max: number) {
 
 function round(value: number) {
   return Number(value.toFixed(2));
+}
+
+function getTimestamp() {
+  if (typeof performance !== "undefined" && typeof performance.now === "function") {
+    return performance.now();
+  }
+  return Date.now();
 }
 
 function formatTime(value?: number | null) {
@@ -651,6 +658,91 @@ export function DeckMatrix({
   const [waveformHover, setWaveformHover] = useState<{ deckId: DeckId; ratio: number } | null>(null);
   const deckLookup = useMemo(() => new Map(decks.map((deck) => [deck.id, deck])), [decks]);
 
+  const playbackHoldStart = useRef<Map<DeckId, number>>(new Map());
+  const playbackHoldHandled = useRef<Set<DeckId>>(new Set());
+
+  const finalizePlaybackHold = useCallback(
+    (deckId: DeckId, shouldTrigger: boolean) => {
+      const start = playbackHoldStart.current.get(deckId);
+      playbackHoldStart.current.delete(deckId);
+      if (shouldTrigger) {
+        playbackHoldHandled.current.add(deckId);
+        const holdSeconds =
+          typeof start === "number" ? Math.max(0, (getTimestamp() - start) / 1000) : undefined;
+        onTogglePlayback(deckId, holdSeconds);
+      } else {
+        playbackHoldHandled.current.delete(deckId);
+      }
+    },
+    [onTogglePlayback],
+  );
+
+  const handlePlaybackPointerDown = useCallback(
+    (deckId: DeckId) => (event: PointerEvent<HTMLButtonElement>) => {
+      playbackHoldHandled.current.delete(deckId);
+      playbackHoldStart.current.set(deckId, getTimestamp());
+      try {
+        event.currentTarget.setPointerCapture(event.pointerId);
+      } catch {}
+    },
+    [],
+  );
+
+  const handlePlaybackPointerUp = useCallback(
+    (deckId: DeckId) => (event: PointerEvent<HTMLButtonElement>) => {
+      try {
+        event.currentTarget.releasePointerCapture(event.pointerId);
+      } catch {}
+      finalizePlaybackHold(deckId, true);
+    },
+    [finalizePlaybackHold],
+  );
+
+  const handlePlaybackPointerCancel = useCallback(
+    (deckId: DeckId) => (event: PointerEvent<HTMLButtonElement>) => {
+      try {
+        event.currentTarget.releasePointerCapture(event.pointerId);
+      } catch {}
+      finalizePlaybackHold(deckId, false);
+    },
+    [finalizePlaybackHold],
+  );
+
+  const handlePlaybackKeyDown = useCallback(
+    (deckId: DeckId) => (event: KeyboardEvent<HTMLButtonElement>) => {
+      if (event.key === " " || event.key === "Enter" || event.code === "Space" || event.code === "Enter") {
+        playbackHoldHandled.current.delete(deckId);
+        if (!playbackHoldStart.current.has(deckId)) {
+          playbackHoldStart.current.set(deckId, getTimestamp());
+        }
+        event.preventDefault();
+      }
+    },
+    [],
+  );
+
+  const handlePlaybackKeyUp = useCallback(
+    (deckId: DeckId) => (event: KeyboardEvent<HTMLButtonElement>) => {
+      if (event.key === " " || event.key === "Enter" || event.code === "Space" || event.code === "Enter") {
+        event.preventDefault();
+        event.stopPropagation();
+        finalizePlaybackHold(deckId, true);
+      }
+    },
+    [finalizePlaybackHold],
+  );
+
+  const handlePlaybackClick = useCallback(
+    (deckId: DeckId) => () => {
+      if (playbackHoldHandled.current.has(deckId)) {
+        playbackHoldHandled.current.delete(deckId);
+        return;
+      }
+      onTogglePlayback(deckId, undefined);
+    },
+    [onTogglePlayback],
+  );
+
   const crossWeights = useMemo(() => {
     const left = 1 - crossfade.x;
     const right = crossfade.x;
@@ -941,7 +1033,12 @@ export function DeckMatrix({
                   <div style={{ display: "flex", alignItems: "center", gap: "12px", flexWrap: "wrap" }}>
                     <button
                       type="button"
-                      onClick={() => onTogglePlayback(deck.id)}
+                      onClick={handlePlaybackClick(deck.id)}
+                      onPointerDown={handlePlaybackPointerDown(deck.id)}
+                      onPointerUp={handlePlaybackPointerUp(deck.id)}
+                      onPointerCancel={handlePlaybackPointerCancel(deck.id)}
+                      onKeyDown={handlePlaybackKeyDown(deck.id)}
+                      onKeyUp={handlePlaybackKeyUp(deck.id)}
                       style={{
                         ...toolbarButtonStyle,
                         padding: "6px 12px",

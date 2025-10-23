@@ -673,7 +673,7 @@ export default function App() {
     }
   };
 
-  const handleTogglePlayback = async (deckId: DeckId) => {
+  const handleTogglePlayback = async (deckId: DeckId, holdSeconds?: number | null) => {
     if (!audioBridge) return;
     const deck = decks.find((item) => item.id === deckId);
     if (!deck) return;
@@ -681,11 +681,13 @@ export default function App() {
       await handleRetryPlayback(deckId);
       return;
     }
+    const fadeDurationSeconds =
+      typeof holdSeconds === "number" && Number.isFinite(holdSeconds) ? holdSeconds : undefined;
     try {
       if (deck.isPlaying) {
-        await audioBridge.stopDeck(deckId);
+        await audioBridge.stopDeck(deckId, { fadeDurationSeconds });
       } else {
-        await audioBridge.playDeck(deckId);
+        await audioBridge.playDeck(deckId, { fadeDurationSeconds });
       }
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);

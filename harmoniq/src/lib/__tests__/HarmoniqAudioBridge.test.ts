@@ -19,6 +19,13 @@ class MockGainNode extends MockAudioNode {
   gain = {
     value: 1,
     setTargetAtTime: vi.fn(),
+    setValueAtTime: vi.fn((value: number) => {
+      this.gain.value = value;
+    }),
+    linearRampToValueAtTime: vi.fn((value: number) => {
+      this.gain.value = value;
+    }),
+    cancelScheduledValues: vi.fn(),
   };
 }
 
@@ -79,9 +86,12 @@ class MockAudioContext {
   decodeDuration = 0;
   closed = false;
   createdSources: MockAudioBufferSourceNode[] = [];
+  createdGains: MockGainNode[] = [];
 
   createGain() {
-    return new MockGainNode();
+    const gain = new MockGainNode();
+    this.createdGains.push(gain);
+    return gain;
   }
 
   createAnalyser() {
@@ -185,6 +195,58 @@ describe("HarmoniqAudioBridge", () => {
     expect(reloadSnapshot?.isPlaying).toBe(false);
 
     unsubscribe();
+  });
+
+  it("ramps deck input gain on play and stop", async () => {
+    const buffer = new ArrayBuffer(8);
+    await bridge.loadDeckAudio("A", {
+      id: "deck-track",
+      arrayBuffer: buffer,
+      objectUrl: "blob:deck",
+      name: "Deck",
+    });
+
+    await bridge.playDeck("A");
+    const fadeInGain = context.createdGains.find((gain) =>
+      gain.gain.linearRampToValueAtTime.mock.calls.some(([value]) => value === 1),
+    );
+    expect(fadeInGain).toBeDefined();
+
+    await bridge.stopDeck("A");
+    const fadeOutGain = context.createdGains.find((gain) =>
+      gain.gain.linearRampToValueAtTime.mock.calls.some(([value]) => value === 0),
+    );
+    expect(fadeOutGain).toBeDefined();
+  });
+
+  it("honors custom fade durations for playback toggles", async () => {
+    const buffer = new ArrayBuffer(8);
+    await bridge.loadDeckAudio("A", {
+      id: "deck-track",
+      arrayBuffer: buffer,
+      objectUrl: "blob:deck",
+      name: "Deck",
+    });
+
+    context.currentTime = 0.75;
+    await bridge.playDeck("A", { fadeDurationSeconds: 1.25 });
+    const fadeInGain = context.createdGains.find((gain) =>
+      gain.gain.linearRampToValueAtTime.mock.calls.some(([value]) => value === 1),
+    );
+    expect(fadeInGain).toBeDefined();
+    const fadeInCall = fadeInGain?.gain.linearRampToValueAtTime.mock.calls.find(([value]) => value === 1);
+    expect(fadeInCall).toBeDefined();
+    expect(fadeInCall?.[1]).toBeCloseTo(0.75 + 1.25, 6);
+
+    context.currentTime = 2.4;
+    await bridge.stopDeck("A", { fadeDurationSeconds: 0.4 });
+    const fadeOutGain = context.createdGains.find((gain) =>
+      gain.gain.linearRampToValueAtTime.mock.calls.some(([value]) => value === 0),
+    );
+    expect(fadeOutGain).toBeDefined();
+    const fadeOutCall = fadeOutGain?.gain.linearRampToValueAtTime.mock.calls.find(([value]) => value === 0);
+    expect(fadeOutCall).toBeDefined();
+    expect(fadeOutCall?.[1]).toBeCloseTo(2.4 + 0.4, 6);
   });
 
   it("updates playback rate when timestretch changes", async () => {
