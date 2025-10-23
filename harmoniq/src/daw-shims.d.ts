@@ -51,3 +51,40 @@ declare module "@daw/lib/audioEngine" {
     setTempo(bpm: number): void;
   };
 }
+
+type HarmoniqDeckId = "A" | "B" | "C" | "D";
+
+type HarmoniqLoopSlotLength = "bar" | "half";
+
+type HarmoniqLoopSlotStatus = "idle" | "queued" | "recording" | "playing";
+
+interface HarmoniqLoopArmingEntry {
+  deckId: HarmoniqDeckId;
+  slotId: string;
+  length: HarmoniqLoopSlotLength;
+  startTime: number;
+  stopTime: number;
+  state: "waiting" | "recording";
+}
+
+declare const transportState: import("react").MutableRefObject<{
+  position: number;
+  hasTick: boolean;
+}>;
+
+declare const loopArmings: import("react").MutableRefObject<Map<string, HarmoniqLoopArmingEntry>>;
+
+declare function processLoopArmings(position: number): void;
+declare function resetLoopArmings(cancelPending?: boolean): void;
+declare function scheduleLoopArming(
+  deckId: HarmoniqDeckId,
+  slotId: string,
+  length: HarmoniqLoopSlotLength,
+): void;
+declare function clearLoopTimersForSlot(key: string): void;
+declare function registerLoopTimer(key: string, delay: number, callback: () => void): void;
+declare function updateLoopSlotStatus(
+  deckId: HarmoniqDeckId,
+  slotId: string,
+  status: HarmoniqLoopSlotStatus,
+): void;

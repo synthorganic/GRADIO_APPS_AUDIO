@@ -2,6 +2,8 @@ export type DeckId = "A" | "B" | "C" | "D";
 
 export type LoopSlotStatus = "idle" | "queued" | "recording" | "playing";
 
+export type EqBandId = "lows" | "mids" | "highs";
+
 export interface LoopSlot {
   id: string;
   label: string;

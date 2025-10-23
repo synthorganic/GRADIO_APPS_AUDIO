@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { theme } from "@daw/theme";
 import { DeckMatrix } from "./components/DeckMatrix";
+import { audioEngine } from "@daw/lib/audioEngine";
 import type {
   CrossfadeState,
   DeckAudioSource,
@@ -296,14 +297,34 @@ const INITIAL_DECKS: DeckPerformance[] = [
   },
 ];
 
+const LOOP_SLOT_PRESETS: Array<{ label: string; length: LoopSlot["length"] }> = [
+  { label: "Clip 1", length: "bar" },
+  { label: "Clip 2", length: "half" },
+  { label: "Clip 3", length: "bar" },
+];
+
 function createLoopSlots(deckId: DeckId): LoopSlot[] {
-  const labels = ["Clip 1", "Clip 2", "Clip 3", "Clip 4", "Clip 5", "Clip 6"];
-  return labels.map((label, index) => ({
+  return LOOP_SLOT_PRESETS.map((preset, index) => ({
     id: `${deckId.toLowerCase()}-clip-${index + 1}`,
-    label,
+    label: preset.label,
     status: "idle",
-    length: index % 2 === 0 ? "bar" : "half",
+    length: preset.length,
   }));
+}
+
+function normalizeLoopSlots(deckId: DeckId, slots?: LoopSlot[]): LoopSlot[] {
+  if (!slots || slots.length === 0) {
+    return createLoopSlots(deckId);
+  }
+  return LOOP_SLOT_PRESETS.map((preset, index) => {
+    const existing = slots[index];
+    return {
+      id: `${deckId.toLowerCase()}-clip-${index + 1}`,
+      label: preset.label,
+      status: existing?.status ?? "idle",
+      length: existing?.length ?? preset.length,
+    };
+  });
 }
 
 const INITIAL_LOOP_SLOTS: Record<DeckId, LoopSlot[]> = {
@@ -323,6 +344,17 @@ interface LoopArmingState {
   stopTime: number;
   state: "waiting" | "recording";
 }
+
+type LoopSlotStatus = LoopSlot["status"];
+
+type DawRuntime = typeof globalThis & {
+  processLoopArmings?: (position: number) => void;
+  resetLoopArmings?: (cancelPending?: boolean) => void;
+  scheduleLoopArming?: (deckId: DeckId, slotId: string, length: LoopSlot["length"]) => void;
+  clearLoopTimersForSlot?: (key: string) => void;
+  registerLoopTimer?: (key: string, delay: number, callback: () => void) => void;
+  updateLoopSlotStatus?: (deckId: DeckId, slotId: string, status: LoopSlotStatus) => void;
+};
 
 const FX_RACK_PRESETS: Record<"left" | "right", FxModuleConfig[]> = {
   left: [
@@ -350,9 +382,103 @@ export default function App() {
   const [masterTrim, setMasterTrim] = useState(0.9);
   const [selectorKey, setSelectorKey] = useState<string | null>(null);
   const [libraryTracks, setLibraryTracks] = useState<AnalyzedTrackSummary[]>([]);
+  const [isLibraryOpen, setIsLibraryOpen] = useState(false);
   const masterBpm = useMemo(() => MASTER_BASE_BPM * masterTimestretch, [masterTimestretch]);
   const measureSeconds = useMemo(() => 240 / Math.max(masterBpm, 1), [masterBpm]);
   const loopTimers = useRef<Map<string, number>>(new Map());
+  const transportStateRef = useRef<{ position: number; hasTick: boolean }>({
+    position: 0,
+    hasTick: false,
+  });
+  const loopArmingsRef = useRef<Map<string, LoopArmingState>>(new Map());
+  const daw = globalThis as DawRuntime;
+
+  const applyLoopSlotStatus = useCallback(
+    (deckId: DeckId, slotId: string, status: LoopSlotStatus) => {
+      setLoopSlots((prev) => {
+        const slots = normalizeLoopSlots(deckId, prev[deckId]);
+        return {
+          ...prev,
+          [deckId]: slots.map((slot) => (slot.id === slotId ? { ...slot, status } : slot)),
+        };
+      });
+      daw.updateLoopSlotStatus?.(deckId, slotId, status);
+    },
+    [daw],
+  );
+
+  const clearLoopTimersForSlotLocal = useCallback(
+    (key: string) => {
+      loopTimers.current.forEach((handle, timerKey) => {
+        if (timerKey === key || timerKey.startsWith(`${key}:`)) {
+          window.clearTimeout(handle);
+          loopTimers.current.delete(timerKey);
+        }
+      });
+      daw.clearLoopTimersForSlot?.(key);
+    },
+    [daw],
+  );
+
+  const registerLoopTimerLocal = useCallback(
+    (key: string, delay: number, callback: () => void) => {
+      clearLoopTimersForSlotLocal(key);
+      const handle = window.setTimeout(() => {
+        loopTimers.current.delete(key);
+        callback();
+      }, Math.max(0, delay));
+      loopTimers.current.set(key, handle);
+      daw.registerLoopTimer?.(key, delay, callback);
+    },
+    [clearLoopTimersForSlotLocal, daw],
+  );
+
+  const resetLoopArmingsLocal = useCallback(
+    (cancelPending: boolean = false) => {
+      loopArmingsRef.current.clear();
+      if (cancelPending) {
+        loopTimers.current.forEach((handle) => window.clearTimeout(handle));
+        loopTimers.current.clear();
+      }
+      daw.resetLoopArmings?.(cancelPending);
+    },
+    [daw],
+  );
+
+  const scheduleLoopArmingLocal = useCallback(
+    (deckId: DeckId, slotId: string, length: LoopSlot["length"]) => {
+      const key = `${deckId}-${slotId}`;
+      const windowSeconds = length === "bar" ? measureSeconds : measureSeconds / 2;
+      loopArmingsRef.current.set(key, {
+        deckId,
+        slotId,
+        length,
+        startTime: transportStateRef.current.position,
+        stopTime: transportStateRef.current.position + windowSeconds,
+        state: "waiting",
+      });
+      daw.scheduleLoopArming?.(deckId, slotId, length);
+    },
+    [daw, measureSeconds],
+  );
+
+  const processLoopArmingsLocal = useCallback(
+    (position: number) => {
+      loopArmingsRef.current.forEach((entry, key) => {
+        if (entry.state === "waiting" && position >= entry.startTime) {
+          const windowSeconds = entry.length === "bar" ? measureSeconds : measureSeconds / 2;
+          entry.state = "recording";
+          entry.stopTime = position + windowSeconds;
+          applyLoopSlotStatus(entry.deckId, entry.slotId, "recording");
+        } else if (entry.state === "recording" && position >= entry.stopTime) {
+          loopArmingsRef.current.delete(key);
+          applyLoopSlotStatus(entry.deckId, entry.slotId, "playing");
+        }
+      });
+      daw.processLoopArmings?.(position);
+    },
+    [applyLoopSlotStatus, daw, measureSeconds],
+  );
   const captureObjectUrls = useRef<Map<DeckId, string>>(new Map());
   const audioBridge = useMemo(() => {
     if (typeof window === "undefined") {
@@ -471,9 +597,10 @@ export default function App() {
     );
     setLoopSlots((prev) => ({
       ...prev,
-      [deckId]: prev[deckId]?.map((slot) => ({ ...slot, status: "idle" })) ?? createLoopSlots(deckId),
+      [deckId]: normalizeLoopSlots(deckId, prev[deckId]).map((slot) => ({ ...slot, status: "idle" })),
     }));
     handleFocusDeck(deckId);
+    setIsLibraryOpen(false);
     if (audioBridge) {
       audioBridge.setDeckStemFocus(deckId, null);
     }
@@ -664,26 +791,47 @@ export default function App() {
   }, []);
 
   useEffect(() => {
+    if (!libraryTracks.length) {
+      setIsLibraryOpen(false);
+    }
+  }, [libraryTracks.length]);
+
+  useEffect(() => {
+    if (!isLibraryOpen) {
+      return;
+    }
+    const handleKey = (event: KeyboardEvent) => {
+      if (event.key === "Escape") {
+        setIsLibraryOpen(false);
+      }
+    };
+    window.addEventListener("keydown", handleKey);
+    return () => {
+      window.removeEventListener("keydown", handleKey);
+    };
+  }, [isLibraryOpen]);
+
+  useEffect(() => {
     audioEngine.setTempo(masterBpm);
   }, [masterBpm]);
 
   useEffect(() => {
     const handlePlay = (event: Event) => {
       const detail = (event as CustomEvent<{ timelineOffset?: number }>).detail;
-      transportState.current.position = detail?.timelineOffset ?? 0;
+      transportStateRef.current.position = detail?.timelineOffset ?? 0;
     };
     const handleTick = (event: Event) => {
       const detail = (event as CustomEvent<{ timelineOffset?: number; position: number }>).detail;
       const timelineOffset = detail?.timelineOffset ?? 0;
       const position = timelineOffset + detail.position;
-      transportState.current.position = position;
-      transportState.current.hasTick = true;
-      processLoopArmings(position);
+      transportStateRef.current.position = position;
+      transportStateRef.current.hasTick = true;
+      processLoopArmingsLocal(position);
     };
     const handleStop = () => {
-      transportState.current.hasTick = false;
-      transportState.current.position = 0;
-      resetLoopArmings(true);
+      transportStateRef.current.hasTick = false;
+      transportStateRef.current.position = 0;
+      resetLoopArmingsLocal(true);
     };
 
     window.addEventListener("audio-play", handlePlay as EventListener);
@@ -695,15 +843,15 @@ export default function App() {
       window.removeEventListener("audio-tick", handleTick as EventListener);
       window.removeEventListener("audio-stop", handleStop as EventListener);
     };
-  }, [processLoopArmings, resetLoopArmings]);
+  }, [processLoopArmingsLocal, resetLoopArmingsLocal]);
 
   useEffect(() => {
-    if (!transportState.current.hasTick || loopArmings.current.size === 0) {
+    if (!transportStateRef.current.hasTick || loopArmingsRef.current.size === 0) {
       return;
     }
     const keys: string[] = [];
     const pending: Array<{ deckId: DeckId; slotId: string; length: LoopSlot["length"] }> = [];
-    loopArmings.current.forEach((entry, key) => {
+    loopArmingsRef.current.forEach((entry, key) => {
       if (entry.state === "waiting") {
         keys.push(key);
         pending.push({ deckId: entry.deckId, slotId: entry.slotId, length: entry.length });
@@ -713,44 +861,53 @@ export default function App() {
       return;
     }
     keys.forEach((key) => {
-      clearLoopTimersForSlot(key);
-      loopArmings.current.delete(key);
+      clearLoopTimersForSlotLocal(key);
+      loopArmingsRef.current.delete(key);
     });
     pending.forEach(({ deckId, slotId, length }) => {
-      scheduleLoopArming(deckId, slotId, length);
+      scheduleLoopArmingLocal(deckId, slotId, length);
     });
-  }, [clearLoopTimersForSlot, scheduleLoopArming, measureSeconds]);
+  }, [clearLoopTimersForSlotLocal, scheduleLoopArmingLocal, measureSeconds]);
 
   const handleToggleLoopSlot = (deckId: DeckId, slotId: string) => {
-    const slot = loopSlots[deckId]?.find((item) => item.id === slotId);
+    const slots = normalizeLoopSlots(deckId, loopSlots[deckId]);
+    const slot = slots.find((item) => item.id === slotId);
     if (!slot) return;
     const baseKey = `${deckId}-${slotId}`;
     const deck = decks.find((item) => item.id === deckId);
     if (!deck) return;
     if (slot.status !== "idle") {
-      clearLoopTimersForSlot(baseKey);
-      loopArmings.current.delete(baseKey);
-      updateLoopSlotStatus(deckId, slotId, "idle");
+      clearLoopTimersForSlotLocal(baseKey);
+      loopArmingsRef.current.delete(baseKey);
+      applyLoopSlotStatus(deckId, slotId, "idle");
       if (audioBridge) {
         audioBridge.cancelLoopCapture(deckId);
       }
       return;
     }
 
-    clearLoopTimersForSlot(baseKey);
-    loopArmings.current.delete(baseKey);
-    updateLoopSlotStatus(deckId, slotId, "queued");
+    clearLoopTimersForSlotLocal(baseKey);
+    loopArmingsRef.current.delete(baseKey);
+    loopArmingsRef.current.set(baseKey, {
+      deckId,
+      slotId,
+      length: slot.length,
+      startTime: transportStateRef.current.position,
+      stopTime: transportStateRef.current.position,
+      state: "waiting",
+    });
+    applyLoopSlotStatus(deckId, slotId, "queued");
     const beatsPerBar = 4;
-    const bpm = deck.bpm ?? masterTempo;
+    const bpm = deck.bpm ?? masterBpm;
     const secondsPerBeat = 60 / Math.max(1, bpm);
     const captureLengthSeconds = secondsPerBeat * (slot.length === "bar" ? beatsPerBar : beatsPerBar / 2);
     const preparation = Math.max(120, Math.round(secondsPerBeat * 1000));
 
-    registerLoopTimer(`${baseKey}:record`, preparation, () => {
-      updateLoopSlotStatus(deckId, slotId, "recording");
+    registerLoopTimerLocal(`${baseKey}:record`, preparation, () => {
+      applyLoopSlotStatus(deckId, slotId, "recording");
       if (!audioBridge) {
-        registerLoopTimer(`${baseKey}:play`, Math.round(captureLengthSeconds * 1000), () => {
-          updateLoopSlotStatus(deckId, slotId, "playing");
+        registerLoopTimerLocal(`${baseKey}:play`, Math.round(captureLengthSeconds * 1000), () => {
+          applyLoopSlotStatus(deckId, slotId, "playing");
         });
         return;
       }
@@ -794,10 +951,10 @@ export default function App() {
                 : item,
             ),
           );
-          updateLoopSlotStatus(deckId, slotId, "playing");
+          applyLoopSlotStatus(deckId, slotId, "playing");
           addLoop({
             name,
-            bpm: Math.round(deck.bpm ?? masterTempo),
+            bpm: Math.round(deck.bpm ?? masterBpm),
             key: deck.tonalKey ?? selectedKey,
             waveform,
             mood: deck.mood ?? "Captured Loop",
@@ -809,7 +966,7 @@ export default function App() {
           if (message.includes("cancelled")) {
             return;
           }
-          updateLoopSlotStatus(deckId, slotId, "idle");
+          applyLoopSlotStatus(deckId, slotId, "idle");
           setDecks((prev) =>
             prev.map((item) =>
               item.id === deckId
@@ -913,7 +1070,7 @@ export default function App() {
     const isActive = deck.activeStem === stem && deck.stemStatus === "stem";
     const targetStem: StemType | null = isActive ? null : stem;
     const timerKey = `stem-${deckId}`;
-    clearLoopTimersForSlot(timerKey);
+    clearLoopTimersForSlotLocal(timerKey);
 
     const baseBpm = deck.bpm ?? MASTER_BASE_BPM;
     const stretchedBpm = Math.max(baseBpm * masterTimestretch, 1);
@@ -932,33 +1089,22 @@ export default function App() {
       ),
     );
 
-    registerLoopTimer(timerKey, measureMs, () => {
+    registerLoopTimerLocal(timerKey, measureMs, () => {
       setDecks((prev) =>
         prev.map((item) => {
           if (item.id !== deckId) return item;
-          const updatedStems = item.stems
-            ? item.stems.map((stem): DeckStem => {
-                if (!targetStem) {
-                  return { ...stem, status: "standby" as StemStatus };
-                }
-                if (stem.type === targetStem) {
-                  return { ...stem, status: "active" as StemStatus };
-                }
-                return { ...stem, status: "muted" as StemStatus };
-              })
-            : item.stems;
           const nextLevel = targetStem
             ? clamp(Math.max(item.level, 0.62), 0, 1)
             : clamp(Math.max(item.level, 0.45), 0, 1);
           const updatedStems = item.stems
             ? item.stems.map((entry) => {
-                if (targetStem && entry.type === targetStem) {
+                if (!targetStem) {
+                  return { ...entry, status: "standby" as StemStatus };
+                }
+                if (entry.type === targetStem) {
                   return { ...entry, status: "active" as StemStatus };
                 }
-                if (targetStem) {
-                  return { ...entry, status: "muted" as StemStatus };
-                }
-                return { ...entry, status: "standby" as StemStatus };
+                return { ...entry, status: "muted" as StemStatus };
               })
             : item.stems;
           return {
@@ -1007,6 +1153,19 @@ export default function App() {
           }}
         >
           <div className="harmoniq-shell__matrix">
+            <div className="harmoniq-shell__utilities">
+              <TrackUploadPanel onTracksAnalyzed={handleTracksAnalyzed} />
+              <button
+                type="button"
+                className="harmoniq-library-toggle"
+                onClick={() => setIsLibraryOpen(true)}
+                disabled={!libraryTracks.length}
+                aria-haspopup="dialog"
+                aria-expanded={isLibraryOpen}
+              >
+                Open Library
+              </button>
+            </div>
             <DeckMatrix
               decks={decks}
               crossfade={crossfade}
@@ -1029,24 +1188,14 @@ export default function App() {
               onRetryPlayback={handleRetryPlayback}
             />
           </div>
-          <div className="harmoniq-shell__wheel">
-            <div className="harmoniq-shell__wheel-layout">
-              <FxRackPanel title="FX Bank Alpha" modules={FX_RACK_PRESETS.left} alignment="left" />
-              <HarmonicWheelSelector
-                value={selectedKey}
-                onChange={setSelectedKey}
-                onOpenKey={handleOpenKeySelector}
-              />
-              <FxRackPanel title="FX Bank Omega" modules={FX_RACK_PRESETS.right} alignment="right" />
-            </div>
-            <div className="harmoniq-shell__library">
-              <div className="harmoniq-shell__library-content">
-                <div className="harmoniq-shell__library-upper">
-                  <TrackUploadPanel onTracksAnalyzed={handleTracksAnalyzed} />
-                  <TrackLibraryList tracks={libraryTracks} onLoad={handleLoadTrackToDeck} />
-                </div>
-              </div>
-            </div>
+          <div className="harmoniq-shell__wheel-band">
+            <FxRackPanel title="FX Bank Alpha" modules={FX_RACK_PRESETS.left} alignment="left" />
+            <HarmonicWheelSelector
+              value={selectedKey}
+              onChange={setSelectedKey}
+              onOpenKey={handleOpenKeySelector}
+            />
+            <FxRackPanel title="FX Bank Omega" modules={FX_RACK_PRESETS.right} alignment="right" />
           </div>
         </div>
       </div>
@@ -1057,6 +1206,34 @@ export default function App() {
           onClose={handleCloseSelector}
           onLoadLoop={handleLoadLoop}
         />
+      )}
+      {isLibraryOpen && (
+        <div className="harmoniq-library-modal" role="dialog" aria-modal="true">
+          <button
+            type="button"
+            className="harmoniq-library-modal__backdrop"
+            aria-label="Close library"
+            onClick={() => setIsLibraryOpen(false)}
+          />
+          <div className="harmoniq-library-modal__panel">
+            <header className="harmoniq-library-modal__header">
+              <div>
+                <h2>Track Library</h2>
+                <p>Select a track to assign it to a deck.</p>
+              </div>
+              <button
+                type="button"
+                className="harmoniq-library-modal__close"
+                onClick={() => setIsLibraryOpen(false)}
+              >
+                Close
+              </button>
+            </header>
+            <div className="harmoniq-library-modal__body">
+              <TrackLibraryList tracks={libraryTracks} onLoad={handleLoadTrackToDeck} />
+            </div>
+          </div>
+        </div>
       )}
     </>
   );
