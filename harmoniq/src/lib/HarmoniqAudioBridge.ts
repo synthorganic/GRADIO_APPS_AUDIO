@@ -619,6 +619,10 @@ interface DeckPlaybackInternal {
   lastSource?: DeckAudioSource;
 }
 
+interface PlaybackFadeOptions {
+  fadeDurationSeconds?: number | null;
+}
+
 type DiagnosticsListener = (snapshot: DeckPlaybackDiagnostics) => void;
 
 interface LoopCaptureSession {
@@ -672,6 +676,8 @@ export class HarmoniqAudioBridge {
 
   private readonly meterIntervalMs: number;
 
+  private readonly defaultFadeDuration = 0.6;
+
   private meterInterval: ReturnType<typeof setInterval> | null = null;
 
   private playback = new Map<DeckId, DeckPlaybackInternal>();
@@ -679,6 +685,8 @@ export class HarmoniqAudioBridge {
   private diagnosticsListeners = new Set<DiagnosticsListener>();
 
   private loopCaptures = new Map<DeckId, LoopCaptureSession>();
+
+  private deckFadeTimers = new Map<DeckId, ReturnType<typeof setTimeout>>();
 
   constructor(options: HarmoniqAudioBridgeOptions = {}) {
     this.injectedContext = options.context ?? null;
@@ -747,6 +755,7 @@ export class HarmoniqAudioBridge {
       return deck;
     }
     const input = context.createGain();
+    input.gain.value = 0;
     const stemMix = context.createGain();
     stemMix.gain.value = 0.78;
     const stemStages = new Map<StemType, StemStage>();
@@ -1232,7 +1241,71 @@ export class HarmoniqAudioBridge {
     return duration ? clamp(current, 0, duration) : current;
   }
 
+  private clearDeckFadeTimer(deckId: DeckId) {
+    const timer = this.deckFadeTimers.get(deckId);
+    if (timer) {
+      clearTimeout(timer);
+      this.deckFadeTimers.delete(deckId);
+    }
+  }
+
+  private resolveFadeDuration(duration?: number | null) {
+    if (typeof duration === "number" && Number.isFinite(duration) && duration >= 0) {
+      return clamp(duration, 0, 6);
+    }
+    return this.defaultFadeDuration;
+  }
+
+  private setDeckGainImmediate(deck: DeckNodes, context: AudioContext, value: number) {
+    const gainParam = deck.input.gain;
+    const now = context.currentTime;
+    const clamped = clamp(value, 0, 1);
+    try {
+      if (typeof gainParam.cancelScheduledValues === "function") {
+        gainParam.cancelScheduledValues(now);
+      }
+      if (typeof gainParam.setValueAtTime === "function") {
+        gainParam.setValueAtTime(clamped, now);
+      } else {
+        gainParam.value = clamped;
+      }
+    } catch {
+      try {
+        gainParam.value = clamped;
+      } catch {}
+    }
+  }
+
+  private fadeDeckInput(deck: DeckNodes, context: AudioContext, target: number, durationSeconds: number) {
+    const gainParam = deck.input.gain;
+    const now = context.currentTime;
+    const clampedTarget = clamp(target, 0, 1);
+    try {
+      if (typeof gainParam.cancelScheduledValues === "function") {
+        gainParam.cancelScheduledValues(now);
+      }
+      const currentValue = typeof gainParam.value === "number" ? gainParam.value : clampedTarget;
+      if (typeof gainParam.setValueAtTime === "function") {
+        gainParam.setValueAtTime(currentValue, now);
+      } else {
+        gainParam.value = currentValue;
+      }
+      if (typeof gainParam.linearRampToValueAtTime === "function") {
+        gainParam.linearRampToValueAtTime(clampedTarget, now + durationSeconds);
+      } else if (typeof gainParam.setTargetAtTime === "function") {
+        gainParam.setTargetAtTime(clampedTarget, now, durationSeconds * 0.5);
+      } else {
+        gainParam.value = clampedTarget;
+      }
+    } catch {
+      try {
+        gainParam.value = clampedTarget;
+      } catch {}
+    }
+  }
+
   private stopPlayback(deckId: DeckId, playback: DeckPlaybackInternal, preservePosition = false) {
+    this.clearDeckFadeTimer(deckId);
     const context = this.getActiveContext();
     if (!preservePosition) {
       const current = this.computeCurrentTime(playback, context);
@@ -1379,7 +1452,7 @@ export class HarmoniqAudioBridge {
     }
   }
 
-  async playDeck(deckId: DeckId) {
+  async playDeck(deckId: DeckId, options?: PlaybackFadeOptions) {
     const context = this.getContext();
     if (!context) {
       throw new Error("Audio engine unavailable");
@@ -1392,6 +1465,7 @@ export class HarmoniqAudioBridge {
       this.emitDiagnostics(deckId);
       throw new Error(message);
     }
+    const fadeDuration = this.resolveFadeDuration(options?.fadeDurationSeconds);
     try {
       this.stopPlayback(deckId, playback, true);
       const offset = clamp(
@@ -1419,6 +1493,7 @@ export class HarmoniqAudioBridge {
         current.startedAt = null;
         current.source = null;
         current.position = 0;
+        this.setDeckGainImmediate(deck, context, 0);
         this.emitDiagnostics(deckId);
       };
       playback.source = source;
@@ -1426,6 +1501,9 @@ export class HarmoniqAudioBridge {
       playback.isPlaying = true;
       playback.error = null;
       this.debug(`play deck ${deckId}`, { offset });
+      this.clearDeckFadeTimer(deckId);
+      this.setDeckGainImmediate(deck, context, 0);
+      this.fadeDeckInput(deck, context, 1, fadeDuration);
       source.start(0, offset);
       this.emitDiagnostics(deckId);
     } catch (error) {
@@ -1436,10 +1514,41 @@ export class HarmoniqAudioBridge {
     }
   }
 
-  async stopDeck(deckId: DeckId) {
+  async stopDeck(deckId: DeckId, options?: PlaybackFadeOptions) {
     const playback = this.ensurePlayback(deckId);
+    const context = this.getActiveContext();
+    const deck = context ? this.decks.get(deckId) ?? null : null;
+    const fadeDuration = this.resolveFadeDuration(options?.fadeDurationSeconds);
     if (!playback.source && !playback.isPlaying) {
       playback.error = null;
+      if (context && deck) {
+        this.clearDeckFadeTimer(deckId);
+        this.fadeDeckInput(deck, context, 0, fadeDuration);
+        this.emitDiagnostics(deckId);
+      }
+      return;
+    }
+    if (context && deck) {
+      this.clearDeckFadeTimer(deckId);
+      const current = this.computeCurrentTime(playback, context);
+      const duration = playback.durationSeconds ?? playback.buffer?.duration ?? null;
+      playback.position = duration ? clamp(current, 0, duration) : current;
+      playback.startedAt = null;
+      playback.isPlaying = false;
+      playback.error = null;
+      this.fadeDeckInput(deck, context, 0, fadeDuration);
+      this.emitDiagnostics(deckId);
+      const timer = setTimeout(() => {
+        this.deckFadeTimers.delete(deckId);
+        this.stopPlayback(deckId, playback, true);
+        const activeContext = this.getActiveContext();
+        const activeDeck = activeContext ? this.decks.get(deckId) ?? null : null;
+        if (activeContext && activeDeck) {
+          this.setDeckGainImmediate(activeDeck, activeContext, 0);
+        }
+        this.emitDiagnostics(deckId);
+      }, Math.max(0, fadeDuration * 1000));
+      this.deckFadeTimers.set(deckId, timer);
       return;
     }
     this.stopPlayback(deckId, playback);
@@ -1511,6 +1620,8 @@ export class HarmoniqAudioBridge {
   }
 
   dispose() {
+    this.deckFadeTimers.forEach((timer) => clearTimeout(timer));
+    this.deckFadeTimers.clear();
     this.teardownMetering();
     this.loopCaptures.forEach((_, id) => {
       this.cancelLoopCapture(id);
